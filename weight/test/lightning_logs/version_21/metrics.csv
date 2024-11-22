@@ -1,7 +1,0 @@
-auprc,auroc,best_val_auprc,epoch,eval_bce_loss_epoch,eval_bce_loss_step,step,train_bce_loss_epoch,train_bce_loss_step,train_loss_epoch,train_loss_step,val_loss_epoch,val_loss_step,val_mean_auprc,val_std_auprc
-,,,0,,,0,,0.6628396511077881,,0.6628396511077881,,,,
-,,,,,0.70961594581604,0,,,,,,0.70961594581604,,
-,,,,,0.733189582824707,1,,,,,,0.733189582824707,,
-,,,0,0.7143306732177734,,0,,,,,0.7143306732177734,,nan,nan
-,,,0,,,0,0.6628396511077881,,0.6628396511077881,,,,,
-0.27668631076812744,0.4511447548866272,0.0,1,,,1,,,,,,,,

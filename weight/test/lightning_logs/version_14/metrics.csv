@@ -1,5 +1,0 @@
-epoch,eval_bce_loss_epoch,eval_bce_loss_step,step,train_bce_loss_step,train_loss_step,val_loss_epoch,val_loss_step,val_mean_auprc,val_std_auprc
-0,,,0,0.7228421568870544,0.7228421568870544,,,,
-,,0.7301058769226074,0,,,,0.7301058769226074,,
-,,0.7143130302429199,1,,,,0.7143130302429199,,
-0,0.7269473075866699,,0,,,0.7269473075866699,,nan,nan
