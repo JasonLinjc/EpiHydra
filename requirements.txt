@@ -1,0 +1,11 @@
+numpy~=1.26.3
+torch~=2.4.1+cu118
+pandas~=1.4.4
+kipoiseq~=0.5.2
+pyfaidx~=0.8.1.2
+h5py~=3.10.0
+scikit-learn~=1.0.2
+scipy~=1.7.3
+transformers~=4.44.2
+bio~=1.6.2
+triton~=3.0.0
