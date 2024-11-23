@@ -12,11 +12,11 @@ from model.utils import seq2onehot
 
 
 class DiffTransformerEncoder(nn.Module):
-    def __init__(self, max_seq_len, hidden_dim, num_layers, norm=None):
+    def __init__(self, max_seq_len, hidden_dim, num_layers, num_heads, norm=None):
         super().__init__()
         encoder = []
         for i in range(num_layers):
-            encoder.append(MultiheadFlashDiff2(embed_dim=hidden_dim, depth=i, max_seq_len=max_seq_len, num_heads=4))
+            encoder.append(MultiheadFlashDiff2(embed_dim=hidden_dim, depth=i, max_seq_len=max_seq_len, num_heads=num_heads))
 
         self.layers = nn.ModuleList(encoder)
         self.num_layers = num_layers
@@ -38,12 +38,13 @@ class DiffTransformerReg(RegHyperModel):
         self.best_val_pr = 0
         self.weight_decay = args.weight_decay
 
-        self.input_embed = nn.Embedding(num_embeddings=5, embedding_dim=args.hidden_dim)
+        # self.input_embed = nn.Embedding(num_embeddings=5, embedding_dim=args.hidden_dim)
+        self.input_embed = nn.Conv1d(4,512,10)
 
-        self.backbone = DiffTransformerEncoder(args.max_seq_len, args.hidden_dim, args.enc_layers)
+        self.backbone = DiffTransformerEncoder(args.max_seq_len, args.hidden_dim, args.enc_layers, args.num_heads)
 
         self.classifier = nn.Sequential(
-            nn.Linear(args.max_seq_len,1),
+            nn.Linear(args.max_seq_len-9,1),
             nn.Flatten(-2,-1),
             nn.LayerNorm(args.hidden_dim),
             nn.ReLU(),
@@ -51,8 +52,9 @@ class DiffTransformerReg(RegHyperModel):
         )
 
     def forward(self, x):
-        x = self.input_embed(x-7)
-        x = self.backbone(x)
+        x = seq2onehot(x)
+        x = self.input_embed(x)
+        x = self.backbone(x.transpose(1,2))
         x = self.classifier(x.transpose(1,2))
         return {'output': x}
 

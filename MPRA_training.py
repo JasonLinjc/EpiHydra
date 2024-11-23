@@ -10,23 +10,27 @@ from model import utils
 from model.cnn import ExperimentArgs, EPCOTBackboneReg
 from model.transformer.diff_transformer import DiffTransformerReg
 
-cell='MPRA'
-# project_name=cell+'-EPCOT-200bp'
-project_name='test'
-positive_threshold = 0.3
+cell='Reg'
+project_name=cell+'-EPCOT-200bp'
+# project_name='test'
+
 dec_layers = 3
+enc_layers = 6
+
 loss_type = 'bce'
 freeze_backbone = False
 num_class = 12
 dnase = False
 max_seq_len = 200
 
+num_heads=8
+
 
 lr = 0.0001
 weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-experiment_name = f'lr{lr}-{loss_type}-EPCOT_DiffT'
+experiment_name = f'lr{lr}-{loss_type}-EPCOT_DiffT_cnn_embed'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -38,8 +42,9 @@ args = ExperimentArgs(loss_type=loss_type,
                       # load_backbone='weight/4cells-EPCOT-mask_label/lr0.0005-bce-dnase-H3K-pretraine/epoch=09-val_mean_auprc=0.68.ckpt',
                       freeze_backbone=freeze_backbone,
                       num_class=num_class,
-                      enc_layers=3,
-                      max_seq_len=max_seq_len)
+                      enc_layers=enc_layers,
+                      max_seq_len=max_seq_len,
+                      num_heads=num_heads)
 
 # model = EPCOTBackboneReg(args)
 model = DiffTransformerReg(args)
