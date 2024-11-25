@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 from flash_attn import flash_attn_func
 from torch import nn
 
@@ -21,7 +22,7 @@ class MultiheadFlashDiff2(nn.Module):
             depth,
             num_heads,
             max_seq_len,
-            rotary_embedding=False,
+            rotary_embedding=True,
             output_project=True,
     ):
         super().__init__()
@@ -48,7 +49,10 @@ class MultiheadFlashDiff2(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim // self.n_rep, bias=False)
 
         if output_project:
-            self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+            self.out_proj = nn.Sequential(
+                nn.Linear(embed_dim, embed_dim, bias=False),
+                # nn.ReLU(),
+            )
         else:
             self.out_proj = None
 
@@ -61,7 +65,7 @@ class MultiheadFlashDiff2(nn.Module):
         self.subln = RMSNorm(2 * self.head_dim, eps=1e-5, elementwise_affine=True)
         self.rotary_embedding = rotary_embedding
         # self.subln1 = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
-        self.subln2 = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
+        # self.subln2 = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
 
     def forward(
             self,
@@ -106,10 +110,13 @@ class MultiheadFlashDiff2(nn.Module):
         attn = attn.reshape(bsz, tgt_len, self.num_heads * 2 * self.head_dim)
 
         if self.out_proj is not None:
-            short_cut = attn
             attn = self.out_proj(attn)
-            attn += short_cut
-            attn = self.subln2(attn)
+        # if self.out_proj is not None:
+        #     short_cut = attn
+        #     attn = self.out_proj(attn)
+        #
+        #     attn = attn + short_cut
+        #     attn = self.subln2(attn)
         return attn
 
     def build_rel_pos(self, x, start_pos):

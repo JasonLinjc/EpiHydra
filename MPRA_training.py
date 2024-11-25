@@ -8,14 +8,13 @@ from pytorch_lightning.loggers import WandbLogger
 
 from model import utils
 from model.cnn import ExperimentArgs, EPCOTBackboneReg
-from model.transformer.diff_transformer import DiffTransformerReg
+from model.transformer.diff_transformer import DiffTransformerReg, CNNDiffTransformerReg
 
 cell='Reg'
 project_name=cell+'-EPCOT-200bp'
 # project_name='test'
-
 dec_layers = 3
-enc_layers = 6
+enc_layers = 3
 
 loss_type = 'bce'
 freeze_backbone = False
@@ -30,7 +29,7 @@ lr = 0.0001
 weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-experiment_name = f'lr{lr}-{loss_type}-EPCOT_DiffT_cnn_embed'
+experiment_name = f'lr{lr}-{loss_type}-DiffT_token_embed_ffn_rotary_embed'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -48,6 +47,7 @@ args = ExperimentArgs(loss_type=loss_type,
 
 # model = EPCOTBackboneReg(args)
 model = DiffTransformerReg(args)
+# model = CNNDiffTransformerReg(args)
 
 trainset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='train')
 validset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='valid')
