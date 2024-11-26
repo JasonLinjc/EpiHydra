@@ -42,23 +42,23 @@ class DiffTransformerReg(RegHyperModel):
         self.best_val_pr = 0
         self.weight_decay = args.weight_decay
 
-        self.input_embed = nn.Embedding(num_embeddings=5, embedding_dim=args.hidden_dim)
-        # self.input_embed = nn.Conv1d(4,512,10)
+        # self.input_embed = nn.Embedding(num_embeddings=5, embedding_dim=args.hidden_dim)
+        self.input_embed = nn.Conv1d(4,512,10)
 
         self.backbone = DiffTransformerEncoder(args)
 
         self.classifier = nn.Sequential(
-            nn.Linear(args.max_seq_len,1),
+            nn.Linear(args.max_seq_len-9,1),
             nn.Flatten(-2,-1),
-            nn.LayerNorm(args.hidden_dim),
+            nn.BatchNorm1d(args.hidden_dim),
             nn.ReLU(),
             nn.Linear(args.hidden_dim, 3),
         )
 
     def forward(self, x):
-        # x = seq2onehot(x)
-        x = self.input_embed(x-7)
-        x = self.backbone(x)
+        x = seq2onehot(x)
+        x = self.input_embed(x)
+        x = self.backbone(x.transpose(1,2))
         x = self.classifier(x.transpose(1,2))
         return {'output': x}
 
@@ -107,7 +107,7 @@ class CNNDiffTransformerReg(RegHyperModel):
             nn.Linear(10, 1),
             nn.Flatten(-2,-1),
             nn.ReLU(),
-            nn.LayerNorm([512]),
+            nn.BatchNorm1d(512),
             nn.Linear(512, 3),
         )
 
@@ -157,7 +157,7 @@ class DiffTransformerClass(ClassHyperModel):
         self.classifier = nn.Sequential(
             nn.Linear(args.max_seq_len,1),
             nn.Flatten(-2,-1),
-            nn.LayerNorm(args.hidden_dim),
+            nn.BatchNorm1d(args.hidden_dim),
             nn.ReLU(),
             nn.Linear(args.hidden_dim, args.num_class),
         )
@@ -186,18 +186,26 @@ class DiffTransformerClass(ClassHyperModel):
 class DiffTransformerLayer(nn.Module):
     def __init__(self, hidden_dim, num_heads, max_seq_len, depth, dim_feedforward):
         super().__init__()
-        self.attn_layer = MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads)
+        self.attn_layer = MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=True)
         self.ffn = nn.Sequential(
             nn.Linear(hidden_dim, dim_feedforward),
             nn.ReLU(),
-            nn.Linear(dim_feedforward, hidden_dim)
+            # nn.LayerNorm([max_seq_len-9, dim_feedforward]),
+            nn.Linear(dim_feedforward, hidden_dim),
+            nn.Dropout(p=0.1),
+            # nn.ReLU(),
         )
-        self.rms_norm = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        self.rms_norm1 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        self.rms_norm2 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        # self.rms_norm2 = nn.LayerNorm([max_seq_len-9, hidden_dim])
 
     def forward(self, x):
+        short_cut = x
         x = self.attn_layer(x)
+        x = short_cut+x
+        x = self.rms_norm1(x)
         short_cut = x
         x = self.ffn(x)
         x = x+short_cut
-        x = self.rms_norm(x)
+        x = self.rms_norm2(x)
         return x

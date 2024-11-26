@@ -54,7 +54,7 @@ class EPCOTBackboneClass(ClassHyperModel):
             nn.Linear(80,1),
             nn.LeakyReLU(inplace=True),
             nn.Flatten(-2,-1),
-            nn.LayerNorm([512]),
+            nn.BatchNorm1d(512),
             nn.Linear(512, args.num_class),
 
         )
@@ -88,7 +88,7 @@ class EPCOTBackboneReg(RegHyperModel):
             nn.Linear(10, 1),
             nn.Flatten(-2,-1),
             nn.ReLU(),
-            nn.LayerNorm([512]),
+            nn.BatchNorm1d(512),
             nn.Linear(512, 3),
         )
 

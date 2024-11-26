@@ -8,6 +8,7 @@ from pytorch_lightning.loggers import WandbLogger
 
 from model import utils
 from model.cnn import ExperimentArgs, EPCOTBackboneReg
+from model.striped_hyena import HyenaBackboneReg
 from model.transformer.diff_transformer import DiffTransformerReg, CNNDiffTransformerReg
 
 cell='Reg'
@@ -29,7 +30,7 @@ lr = 0.0001
 weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-experiment_name = f'lr{lr}-{loss_type}-DiffT_token_embed_ffn_rotary_embed'
+experiment_name = f'lr{lr}-{loss_type}-SH'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -46,7 +47,8 @@ args = ExperimentArgs(loss_type=loss_type,
                       num_heads=num_heads)
 
 # model = EPCOTBackboneReg(args)
-model = DiffTransformerReg(args)
+# model = DiffTransformerReg(args)
+model = HyenaBackboneReg(args)
 # model = CNNDiffTransformerReg(args)
 
 trainset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='train')
