@@ -1,6 +1,7 @@
 import torch
 from sklearn.metrics import precision_recall_curve, auc, roc_auc_score
 from scipy.stats import pearsonr
+from torch import nn
 from torch.nn import functional as F
 from transformers import AutoTokenizer
 # from src.dataloaders.utils.mlm import mlm_getitem
@@ -13,6 +14,13 @@ import random
 import h5py
 from Bio.Seq import Seq
 import torch.nn.functional as F
+
+
+def compile_decorator(func):
+    return torch.compile(func, fullgraph=True, dynamic=False, mode='max-autotune')
+
+def disable_compile_decorator(func):
+    return torch._dynamo.disable(func, recursive=True)
 
 class MPRADataset(torch.utils.data.Dataset):
     def __init__(self, path, set_type):
@@ -110,6 +118,29 @@ class EPCOTDataset(torch.utils.data.Dataset):
         hamming_distance = np.sum(x != y)
         return hamming_distance <= threshold
 
+class AutomaticWeightedLoss(nn.Module):
+    """automatically weighted multi-task loss
+
+    Params：
+        num: int，the number of loss
+        x: multi-task loss
+    Examples：
+        loss1=1
+        loss2=2
+        awl = AutomaticWeightedLoss(2)
+        loss_sum = awl(loss1, loss2)
+    """
+
+    def __init__(self, num=2):
+        super(AutomaticWeightedLoss, self).__init__()
+        params = torch.ones(num, requires_grad=True)
+        self.params = torch.nn.Parameter(params)
+
+    def forward(self, x):
+        loss_sum = 0
+        for i, loss in enumerate(x):
+            loss_sum += 0.5 / (self.params[i] ** 2) * loss + torch.log(1 + self.params[i] ** 2)
+        return loss_sum
 
 def focal_loss(
         p: torch.Tensor,
@@ -295,7 +326,7 @@ class Tokenizer(PreTrainedTokenizer):
         return ()
 
 def seq2onehot(x):
-    x -= 7
+    x = x-7
     x = F.one_hot(x, num_classes=5)
     x = x[..., :4]
     return x.float().transpose(1, 2)

@@ -13,12 +13,12 @@ from .utils import seq2onehot, focal_loss
 class ExperimentArgs():
     def __init__(self, lr=0.0001, loss_type='focal', from_ckpt=False, num_class=245, enc_layers=1, dec_layers=2,
                  hidden_dim=512, dropout=0.2, mask_label=False, dim_feedforward=1024, weight_decay=1e-6,
-                 dnase=True, load_backbone=False, freeze_backbone=False, max_seq_len = 1600, rope_theta = 10000, num_heads=4):
+                 dnase=True, load_backbone=False, freeze_backbone=False, max_seq_len = 1600, rope_theta = 10000, num_heads=4, compile=False):
         self.lr = lr
+        self.dropout = dropout
         self.loss_type = loss_type
         self.num_class = num_class
         self.hidden_dim = hidden_dim
-        self.dropout = dropout
         self.num_heads = num_heads
         self.dim_feedforward = dim_feedforward
         self.enc_layers = enc_layers
@@ -31,6 +31,7 @@ class ExperimentArgs():
         self.freeze_backbone = freeze_backbone
         self.rope_theta = rope_theta
         self.max_seq_len = max_seq_len
+        self.compile = compile
 
 
 class EPCOTBackboneClass(ClassHyperModel):
@@ -83,7 +84,8 @@ class EPCOTBackboneClass(ClassHyperModel):
 class EPCOTBackboneReg(RegHyperModel):
     def __init__(self, args):
         super().__init__()
-        self.backbone = EPCOTEncoder(args)
+        self.backbone = EPCOTEncoder(4)
+        self.backbone = torch.compile(self.backbone, fullgraph=True, dynamic=False, mode='max-autotune')
         self.classifier = nn.Sequential(
             nn.Linear(10, 1),
             nn.Flatten(-2,-1),
@@ -97,6 +99,7 @@ class EPCOTBackboneReg(RegHyperModel):
         self.weight_decay = args.weight_decay
 
     def forward(self, x):
+        x = seq2onehot(x)
         x = self.backbone(x)
 
         output = self.classifier(x)

@@ -9,6 +9,7 @@ from einops import rearrange
 from torch import Tensor
 
 from .utils import grab_first_if_tuple
+from ..utils import compile_decorator, disable_compile_decorator
 
 
 class RMSNorm(torch.nn.Module):
@@ -25,6 +26,7 @@ class RMSNorm(torch.nn.Module):
 
             self.rmsnorm_func = rmsnorm_func
 
+    @disable_compile_decorator
     def forward(self, x):
         if self.use_flash_rmsnorm:
             return self.rmsnorm_func(x, self.scale, self.eps)
@@ -71,7 +73,7 @@ class ParallelGatedMLP(nn.Module):
             out_features=config.hidden_size,
             bias=False,
         )
-
+    # @compile_decorator
     def forward(self, z):
         z1, z2 = self.l1(z), self.l2(z)
         z1, z2 = grab_first_if_tuple(z1), grab_first_if_tuple(z2)
@@ -119,6 +121,7 @@ class VocabParallelEmbedding(nn.Embedding):
             padding_idx=padding_idx,
         )
 
+    # @compile_decorator
     def embed(self, input: Tensor) -> Tensor:
         if self.process_group is None:
             return self.forward(input)

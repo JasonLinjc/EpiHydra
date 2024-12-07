@@ -7,6 +7,7 @@ from torch import nn
 
 from .rms_norm import RMSNorm
 from .rotary import apply_rotary_emb
+from ..utils import disable_compile_decorator
 
 
 class MultiheadFlashDiff2(nn.Module):
@@ -24,6 +25,7 @@ class MultiheadFlashDiff2(nn.Module):
             max_seq_len,
             rotary_embedding=True,
             output_project=True,
+            # dropout=0.2,
     ):
         super().__init__()
         # self.args = args
@@ -47,12 +49,15 @@ class MultiheadFlashDiff2(nn.Module):
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.k_proj = nn.Linear(embed_dim, embed_dim // self.n_rep, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim // self.n_rep, bias=False)
+        torch.nn.init.xavier_uniform_(self.q_proj.weight)
+        torch.nn.init.xavier_uniform_(self.k_proj.weight)
+        torch.nn.init.xavier_uniform_(self.v_proj.weight)
 
         if output_project:
-            self.out_proj = nn.Sequential(
-                nn.Linear(embed_dim, embed_dim, bias=False),
+            self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
                 # nn.ReLU(),
-            )
+
+            torch.nn.init.xavier_uniform_(self.out_proj.weight)
         else:
             self.out_proj = None
 
@@ -64,6 +69,7 @@ class MultiheadFlashDiff2(nn.Module):
 
         self.subln = RMSNorm(2 * self.head_dim, eps=1e-5, elementwise_affine=True)
         self.rotary_embedding = rotary_embedding
+        # self.dropout = nn.Dropout(p=dropout)
         # self.subln1 = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
         # self.subln2 = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
 
@@ -72,18 +78,21 @@ class MultiheadFlashDiff2(nn.Module):
             x,
     ):
         bsz, tgt_len, embed_dim = x.size()
+        dtype = x.dtype
         src_len = tgt_len
 
         q = self.q_proj(x)
         k = self.k_proj(x)
-        v = self.v_proj(x)
-
         q = q.view(bsz, tgt_len, 2 * self.num_heads, self.head_dim)
         k = k.view(bsz, src_len, 2 * self.num_kv_heads, self.head_dim)
+
+        v = self.v_proj(x)
         v = v.view(bsz, src_len, self.num_kv_heads, 2, self.head_dim)
+        dtype = q.dtype
 
         if self.rotary_embedding:
-            rel_pos = self.build_rel_pos(q, 0)
+
+            rel_pos = self.build_rel_pos(dtype, tgt_len, 0)
             q = apply_rotary_emb(q, *rel_pos, interleaved=True)
             k = apply_rotary_emb(k, *rel_pos, interleaved=True)
 
@@ -119,11 +128,27 @@ class MultiheadFlashDiff2(nn.Module):
         #     attn = self.subln2(attn)
         return attn
 
-    def build_rel_pos(self, x, start_pos):
-        cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos + x.size(1)])
-        sin = torch.sin(self._precomputed_freqs_cis[start_pos:start_pos + x.size(1)])
-        rel_pos = (cos.to(x.dtype), sin.to(x.dtype))
+    @disable_compile_decorator
+    def build_rel_pos(self, dtype, length, start_pos):
+        cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos + length])
+        sin = torch.sin(self._precomputed_freqs_cis[start_pos:start_pos + length])
+        rel_pos = (cos.to(dtype), sin.to(dtype))
         return rel_pos
+
+class DiffAttnLayer(nn.Module):
+    def  __init__(self, embed_dim, depth, max_seq_len, num_heads, output_project=False, dropout=0.1):
+        super().__init__()
+        self.attn_layer = MultiheadFlashDiff2(embed_dim=embed_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=output_project)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
+    def forward(self, x):
+        x = x.transpose(1,2)
+        shortcut=x
+        x = self.norm(x)
+        x = self.attn_layer(x)
+        x = self.dropout(x)
+        x = x+shortcut
+        return x.transpose(1,2)
 
 def lambda_init_fn(depth):
     return 0.8 - 0.6 * math.exp(-0.3 * depth)

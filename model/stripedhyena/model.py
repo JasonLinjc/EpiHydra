@@ -11,6 +11,7 @@ from .cache import InferenceParams, RecurrentInferenceParams
 from .engine import HyenaInferenceEngine
 from .layers import ParallelGatedMLP, RMSNorm, VocabParallelEmbedding
 from .utils import column_split, print_rank_0
+from ..utils import disable_compile_decorator, compile_decorator
 
 try:
     from flash_attn.modules.mha import MHA
@@ -43,7 +44,7 @@ class AttentionBlock(nn.Module):
             rotary_emb_dim=config.hidden_size // config.num_attention_heads,
             qkv_proj_bias=config.get("qkv_proj_bias", True),
             rotary_emb_base=config.get("rotary_emb_base", 10000),
-            causal=True,
+            causal=False,
             layer_idx=layer_idx,
             out_proj_bias=config.get("mha_out_proj_bias", True),
             use_flash_attn=self.config.use_flash_attn,
@@ -59,23 +60,20 @@ class AttentionBlock(nn.Module):
         if self.config.get("smeared_gqa", False):
             self.inner_mha_cls.num_heads_kv = self.inner_mha_cls.num_heads
         self.inner_mha_cls.rotary_emb.register_buffer("inv_freq", self.inner_mha_cls.rotary_emb.inv_freq)
+        # self.inner_mha_cls.rotary_emb.forward = torch._dynamo.disable(self.inner_mha_cls.rotary_emb.forward, recursive=True)
 
         self.mlp = ParallelGatedMLP(config).to(dtype=mlp_dtype)
 
+    # @disable_compile_decorator
     def forward(self, u, inference_params=None, padding_mask=None, *args, **kwargs):
         if (
             type(padding_mask) == torch.Tensor
         ):  # workaround for masking bug in FA. This works because Wqkv does not have bias
             # and attention scores will be also automatically zeroed.
             u = u * padding_mask[..., None]
+        u = self.pre_norm(u)
 
-        u = (
-            self.inner_mha_cls(
-                self.pre_norm(u),
-                inference_params=inference_params,
-            )
-            + u
-        )
+        u = (self.inner_mha_cls(u, inference_params=inference_params,) + u)
         if type(padding_mask) == torch.Tensor:  # guard against bias
             u = u * padding_mask[..., None]
         u = self.mlp(self.post_norm(u)) + u
@@ -88,7 +86,6 @@ class ParallelHyenaFilter(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
         self.hyena_filter_groups = config.get("hyena_filter_groups", self.config.hidden_size)
-
         self.use_flashfft = config.get("use_flashfft", False)
         self.state_size = config.state_size
         self.hidden_size = config.hidden_size
@@ -118,20 +115,21 @@ class ParallelHyenaFilter(nn.Module):
         self.data_dtype = None
 
         if self.use_flash_depthwise:
-            try:
-                from flashfftconv import FlashDepthwiseConv1d
+            # try:
+            from flashfftconv import FlashDepthWiseConv1d
 
-                self.fir_fn = FlashDepthwiseConv1d(
-                    channels=3 * self.hidden_size,
-                    kernel_size=self.short_filter_length,
-                    padding=self.short_filter_length - 1,
-                    weights=self.short_filter_weight,
-                    bias=self.short_filter_bias,
-                    device=None,
-                    dtype=self.config.get("depthwise_dtype", torch.bfloat16),
-                )
-            except ImportError:
-                "flashfftconv not installed"
+            self.fir_fn = FlashDepthWiseConv1d(
+                channels=3 * self.hidden_size,
+                kernel_size=self.short_filter_length,
+                # padding=self.short_filter_length - 1,
+                padding=1,
+                weights=self.short_filter_weight,
+                bias=self.short_filter_bias,
+                device=None,
+                dtype=self.config.get("depthwise_dtype", torch.bfloat16),
+            )
+            # except ImportError:
+            #     "flashfftconv not installed"
         else:
             self.fir_fn = F.conv1d
 
@@ -153,6 +151,7 @@ class ParallelHyenaFilter(nn.Module):
         self.residues = nn.Parameter(torch.randn(self.num_systems, self.state_size, 1, 2))
         self.h = None
 
+    @disable_compile_decorator
     def forward(self, u, inference_params=None, padding_mask=None, *args, **kwargs):
         if inference_params is not None and self.layer_idx in inference_params.fir_state_dict.keys():
             return self.sequential_forward(u, inference_params)
@@ -171,7 +170,7 @@ class ParallelHyenaFilter(nn.Module):
             fir_length=self.short_filter_length,
             inference_params=inference_params,
             padding_mask=padding_mask,
-        )
+        )#
         if inference_params:
             inference_params.fir_state_dict[self.layer_idx] = fir_state
 
@@ -250,6 +249,7 @@ class ParallelHyenaFilter(nn.Module):
         y = y.to(dtype=self.data_dtype)
         return y[:, None], inference_params
 
+    @disable_compile_decorator
     def update_time(self, L, device):
         """
         Set [0, 1, ..., L-1] where L is the length of the current batch of inputs.
@@ -263,6 +263,7 @@ class ParallelHyenaFilter(nn.Module):
         else:
             self.t = self.t[..., :L]
 
+    # @compile_decorator
     def compute_filter(self, L, device):
         self.update_time(L, device)
         filter_dtype = torch.float32
@@ -284,25 +285,30 @@ class ParallelGatedConvBlock(nn.Module):
         mlp_dtype = config.get("mlp_dtype", torch.bfloat16)
         self.pre_norm, self.post_norm = RMSNorm(config).to(dtype=dtype), RMSNorm(config).to(dtype=dtype)
         self.filter = ParallelHyenaFilter(config, layer_idx).to(dtype=dtype)
-        self.projections = nn.Linear(config.hidden_size, 3 * config.hidden_size)
+
+        self.projections = nn.Linear(config.hidden_size, 3 * config.hidden_size)# input projection
+        # self.projections.forward = torch.compile(self.projections.forward, fullgraph=True, dynamic=False, mode='max-autotune')
+
         self.out_filter_dense = nn.Linear(config.hidden_size, config.hidden_size).to(dtype)
         self.mlp = ParallelGatedMLP(config).to(dtype=mlp_dtype)
 
         self.proj_norm_fn = self.proj_norm
         self.res_mlp_norm_fn = self.res_mlp_norm
 
-        if self.config.get("compile", False):
-            self.proj_norm_fn = torch.compile(self.proj_norm, fullgraph=True, dynamic=False, mode="reduce-overhead")
-            self.res_mlp_norm_fn = torch.compile(
-                self.res_mlp_norm, fullgraph=True, dynamic=False, mode="reduce-overhead"
-            )
+        # if self.config.get("compile", False):
+        # self.proj_norm_fn = torch.compile(self.proj_norm, fullgraph=True, dynamic=False, mode="max-autotune")
+        # self.res_mlp_norm_fn = torch.compile(
+        #     self.res_mlp_norm, fullgraph=True, dynamic=False, mode="max-autotune"
+        # )
 
     def proj_norm(self, x):
-        return self.projections(self.pre_norm(x))
+        x = self.pre_norm(x)
+        return self.projections(x)
 
     def res_mlp_norm(self, x):
-        return self.mlp(self.post_norm(x)) + x
+        return self.mlp(x) + x
 
+    # @torch.compile(fullgraph=False, dynamic=False, mode='max-autotune')
     def forward(self, u, inference_params=None, padding_mask=None, *args, **kwargs):
         z = self.proj_norm_fn(u)
 
@@ -316,7 +322,7 @@ class ParallelGatedConvBlock(nn.Module):
         if type(padding_mask) == torch.Tensor:  # guard against bias
             z_in = z_in * padding_mask[..., None]
 
-        y = self.res_mlp_norm_fn(z_in)
+        y = self.res_mlp_norm_fn(self.post_norm(z_in))
 
         return y, inference_params
 
@@ -342,12 +348,12 @@ class StripedHyena(nn.Module):
         self.unembed = self.embedding_layer if config.tie_embeddings else VocabParallelEmbedding(config)
 
         if config.get("use_flashfft", "True"):
-            try:
-                from flashfftconv import FlashFFTConv
+            # try:
+            from flashfftconv import FlashFFTConv
 
-                self.flash_fft = FlashFFTConv(config.seqlen, dtype=torch.bfloat16)
-            except ImportError:
-                "flashfftconv not installed"
+            self.flash_fft = FlashFFTConv(config.seqlen, dtype=torch.bfloat16)
+            # except ImportError:
+            #     "flashfftconv not installed"
         else:
             self.flash_fft = None
 

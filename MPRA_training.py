@@ -1,5 +1,7 @@
 import torch
+from pytorch_lightning.profilers import AdvancedProfiler
 from torch import nn
+import os
 from torch.utils.data import DataLoader, Subset
 
 from pytorch_lightning import Trainer
@@ -11,13 +13,15 @@ from model.cnn import ExperimentArgs, EPCOTBackboneReg
 from model.striped_hyena import HyenaBackboneReg
 from model.transformer.diff_transformer import DiffTransformerReg, CNNDiffTransformerReg
 
-cell='Reg'
-project_name=cell+'-EPCOT-200bp'
+os.environ['WANDB_MODE']='offline'
+
+cell='MPRA'
+project_name=cell+'-EPCOT_DiffT'
 # project_name='test'
 dec_layers = 3
 enc_layers = 3
 
-loss_type = 'bce'
+loss_type = 'mse'
 freeze_backbone = False
 num_class = 12
 dnase = False
@@ -30,7 +34,7 @@ lr = 0.0001
 weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-experiment_name = f'lr{lr}-{loss_type}-SH'
+experiment_name = f'lr{lr}-{loss_type}-3striped-dp0.1'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -44,12 +48,15 @@ args = ExperimentArgs(loss_type=loss_type,
                       num_class=num_class,
                       enc_layers=enc_layers,
                       max_seq_len=max_seq_len,
-                      num_heads=num_heads)
+                      num_heads=num_heads,
+                      compile=False,
+                      dropout=0.1)
 
 # model = EPCOTBackboneReg(args)
 # model = DiffTransformerReg(args)
-model = HyenaBackboneReg(args)
-# model = CNNDiffTransformerReg(args)
+# model = HyenaBackboneReg(args)
+
+model = CNNDiffTransformerReg(args)
 
 trainset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='train')
 validset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='valid')
@@ -63,6 +70,7 @@ if project_name=='test':
 else:
     wandb_logger=WandbLogger(name=experiment_name, project=project_name, save_dir='./weight/')
     wandb_logger.watch(model, log='all', log_freq=100)
+    # wandb_logger = None
 
 checkpoint_callback = ModelCheckpoint(
         monitor='val_pr',  # 监控验证集损失
@@ -78,6 +86,7 @@ checkpoint_callback_latest = ModelCheckpoint(
     dirpath=f'./weight/{project_name}/{experiment_name}/',  # 保存路径
     filename=f'{experiment_name}-latest'  # 文件名格式
 )
+# profiler = AdvancedProfiler(dirpath='profile.txt')
 trainer = Trainer(
     callbacks=[
         early_stopping,
@@ -89,15 +98,16 @@ trainer = Trainer(
     log_every_n_steps=1,
     accumulate_grad_batches=2,
     precision='bf16-mixed',
+    # profiler=profiler
 )
 
 # DataLoader
-trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True,drop_last=True, num_workers=16)
-validloader = DataLoader(validset, batch_size=batch_size,drop_last=False, num_workers=16)
+trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=16)
+validloader = DataLoader(validset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=16)
 
 trainer.fit(
     model, trainloader, validloader,
-    # ckpt_path='weight/Reg-EPCOT-200bp/lr0.0001-bce-dnase-EPCOT_DiffT_no_linear/lr0.0001-bce-dnase-EPCOT_DiffT_no_linear-latest.ckpt'
+    # ckpt_path='weight/MPRA-EPCOT_DiffT/lr0.0001-mse-4striped-bn-dp0.1/lr0.0001-mse-4striped-bn-dp0.1-latest-v3.ckpt'
 )
 
 model.test_length=len(testset)

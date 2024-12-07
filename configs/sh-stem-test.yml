@@ -50,3 +50,4 @@ inference_mode: False
 tokenizer_type: HFAutoTokenizer
 vocab_file: tokenizer/tokenizer.json
 prefill_style: fft
+seqlen: 256

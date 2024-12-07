@@ -7,9 +7,9 @@ from torch import Tensor
 
 from model.cnn import EPCOTConvLayer, EPCOTEncoder
 from model.hyper_model import RegHyperModel, ClassHyperModel
-from model.transformer.diff_attention import MultiheadFlashDiff2
+from model.transformer.diff_attention import MultiheadFlashDiff2, DiffAttnLayer
 from model.transformer.rms_norm import RMSNorm
-from model.utils import seq2onehot
+from model.utils import seq2onehot, compile_decorator, AutomaticWeightedLoss
 
 
 class DiffTransformerEncoder(nn.Module):
@@ -55,6 +55,7 @@ class DiffTransformerReg(RegHyperModel):
             nn.Linear(args.hidden_dim, 3),
         )
 
+    # @compile_decorator
     def forward(self, x):
         x = seq2onehot(x)
         x = self.input_embed(x)
@@ -75,32 +76,60 @@ class CNNDiffTransformerReg(RegHyperModel):
         super().__init__()
         self.conv_block1 = nn.Sequential(
             EPCOTConvLayer(4, 256, kernel_size=10),
-            nn.Dropout(p=0.1),
-            EPCOTConvLayer(256, 256, kernel_size=10),
+            nn.Dropout(p=args.dropout),
+            # EPCOTConvLayer(256, 256, kernel_size=10),
+            DiffAttnLayer(256, 0, 200, 4)
+            # MultiheadFlashDiff2(embed_dim=256, depth=0, max_seq_len=200, num_heads=4),
         )
         self.conv_block2 = nn.Sequential(
             EPCOTConvLayer(256, 360, kernel_size=8),
-            nn.Dropout(p=0.1),
-            EPCOTConvLayer(360, 360, kernel_size=8),
+            nn.Dropout(p=args.dropout),
+            DiffAttnLayer(360, 1, 40, 4)
+            # MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=40, num_heads=4),
+            # EPCOTConvLayer(360, 512, kernel_size=8),
         )
+        self.conv_block3 = nn.Sequential(
+            EPCOTConvLayer(360, 512, kernel_size=8),
+            nn.Dropout(p=args.dropout),
+            DiffAttnLayer(512, 2, 10, 4)
+            # MultiheadFlashDiff2(embed_dim=512, depth=2, max_seq_len=10, num_heads=4),
 
-        self.diff_t = nn.Sequential(
-            MultiheadFlashDiff2(embed_dim=512, depth=0, max_seq_len=10, num_heads=4),
-            MultiheadFlashDiff2(embed_dim=512, depth=1, max_seq_len=10, num_heads=4),
-            MultiheadFlashDiff2(embed_dim=512, depth=1, max_seq_len=10, num_heads=4),
-            MultiheadFlashDiff2(embed_dim=512, depth=1, max_seq_len=10, num_heads=4),
+            # EPCOTConvLayer(360, 512, kernel_size=8),
         )
+        # self.conv_block4 = nn.Sequential(
+        #     # nn.BatchNorm1d(512),
+        #     EPCOTConvLayer(512, 512, kernel_size=8),
+        #     # nn.BatchNorm1d(512),
+        #     nn.Dropout(p=args.dropout),
+        #     DiffAttnLayer(512, 3, 10, 4)
+        #     # MultiheadFlashDiff2(embed_dim=512, depth=3, max_seq_len=10, num_heads=4),
+        #     # nn.BatchNorm1d(512),
+        #     # EPCOTConvLayer(360, 512, kernel_size=8),
+        # )
+        # self.diff_t = nn.Sequential(
+        #     MultiheadFlashDiff2(embed_dim=360, depth=0, max_seq_len=10, num_heads=4),
+        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
+        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
+        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
+        # )
 
+        # self.diff_t = nn.Sequential(
+        #     # nn.Linear(360, 512, bias=False),
+        #     MultiheadFlashDiff2(embed_dim=512, depth=0, max_seq_len=10, num_heads=4, output_project=False),
+        #     MultiheadFlashDiff2(embed_dim=512, depth=1, max_seq_len=10, num_heads=4, output_project=False),
+        #     # DiffTransformerLayer(512, 4, 10, 0, 1024),
+        #     # DiffTransformerLayer(512, 4, 10, 1, 1024)
+        # )
 
         self.pooling_layer1 = nn.Sequential(
             nn.MaxPool1d(kernel_size=5, stride=5),
             nn.BatchNorm1d(256),
-            nn.Dropout(p=0.1),
+            nn.Dropout(p=args.dropout),
         )
         self.pooling_layer2 = nn.Sequential(
             nn.MaxPool1d(kernel_size=4, stride=4),
             nn.BatchNorm1d(360),
-            nn.Dropout(p=0.1),
+            nn.Dropout(p=args.dropout),
         )
 
         self.classifier = nn.Sequential(
@@ -114,6 +143,20 @@ class CNNDiffTransformerReg(RegHyperModel):
         self.lr = args.lr
         self.best_val_pr= 0
         self.weight_decay = args.weight_decay
+        self.loss_type = args.loss_type
+
+        if "+" in args.loss_type:
+            num = len(args.loss_type.split('+'))
+            self.loss_balancer = AutomaticWeightedLoss(num=num)
+
+        if args.compile:
+            self.conv_block1 = torch.compile(self.conv_block1, fullgraph=True, dynamic=False, mode='max-autotune')
+            self.conv_block2 = torch.compile(self.conv_block2, fullgraph=True, dynamic=False, mode='max-autotune')
+
+            self.classifier = torch.compile(self.classifier, fullgraph=True, dynamic=False, mode='max-autotune')
+
+            # self.diff_t = torch.compile(self.diff_t, fullgraph=False, dynamic=False, mode='max-autotune')
+            # self.forward = torch.compile(self.forward, fullgraph=False, dynamic=False, mode='max-autotune')
 
     def forward(self, x):
         x = seq2onehot(x)
@@ -121,18 +164,39 @@ class CNNDiffTransformerReg(RegHyperModel):
         x = self.pooling_layer1(x)
         x = self.conv_block2(x)
         x = self.pooling_layer2(x)
-        x = self.diff_t(x.transpose(1,2))
+        x = self.conv_block3(x)
+        # x = self.conv_block4(x)
+        # x = self.diff_t(x.transpose(1,2))
 
-        output = self.classifier(x.transpose(1,2))
+        output = self.classifier(x)
         return {'output': output}
 
-    def calculate_loss(self, target, output, mask=None):
+    def calculate_loss(self, target, output, mask=None, mode='train'):
         if mask is not None:
             target = target[mask]
             output = output[mask]
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode!='test':
+                self.log(mode+'_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+        if 'l1' in self.loss_type:
+            l1 = F.l1_loss(output, target)
+            if mode!='test':
+                self.log(mode+'_l1', l1, on_step=True, on_epoch=True)
+            loss.append(l1)
+        if 'kl' in self.loss_type:
+            kl = F.kl_div(F.log_softmax(output), F.log_softmax(target))
+            if mode != 'test':
+                self.log(mode + '_kl', kl, on_step=True, on_epoch=True)
+            loss.append(kl)
 
-        loss = F.mse_loss(output, target)
-        return loss
+        if len(loss)>1:
+            loss = self.loss_balancer(loss)
+            return loss
+        else:
+            return loss[0]
 
 class DiffTransformerClass(ClassHyperModel):
     def __init__(self, args):
@@ -186,7 +250,11 @@ class DiffTransformerClass(ClassHyperModel):
 class DiffTransformerLayer(nn.Module):
     def __init__(self, hidden_dim, num_heads, max_seq_len, depth, dim_feedforward):
         super().__init__()
-        self.attn_layer = MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=True)
+        self.attn_layer = nn.Sequential(
+            MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=False),
+            nn.Dropout(p=0.1),
+        )
+
         self.ffn = nn.Sequential(
             nn.Linear(hidden_dim, dim_feedforward),
             nn.ReLU(),

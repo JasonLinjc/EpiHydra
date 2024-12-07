@@ -89,7 +89,7 @@ class RegHyperModel(LightningModule):
     def training_step(self, batch, batch_idx):
         x, target = batch
         output = self(x)
-        loss = self.calculate_loss(target, **output)
+        loss = self.calculate_loss(target, mode='train', **output)
 
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return {'loss': loss}
@@ -103,7 +103,7 @@ class RegHyperModel(LightningModule):
         output_dict = self(x)
         self.outputs.append(output_dict['output'].flatten(-2,-1).detach().cpu().to(torch.float32).numpy())
         self.targets.append(target.flatten(-2,-1).detach().cpu().to(torch.float32).numpy())
-        loss = self.calculate_loss(target, **output_dict)
+        loss = self.calculate_loss(target, mode='val', **output_dict)
 
         self.log('val_loss', loss, on_step=True, sync_dist=True)
 
@@ -125,7 +125,7 @@ class RegHyperModel(LightningModule):
     def test_step(self, batch, batch_idx):
         data, target = batch
         output_dict = self(data)
-        loss = self.calculate_loss(target, **output_dict)
+        loss = self.calculate_loss(target, mode='test', **output_dict)
         self.log('test_loss', loss, on_step=True, prog_bar=True, sync_dist=True)
         self.outputs.append(output_dict['output'].flatten(-2,-1).detach().cpu().to(torch.float32).numpy())
         self.targets.append(target.flatten(-2,-1).detach().cpu().to(torch.float32).numpy())
