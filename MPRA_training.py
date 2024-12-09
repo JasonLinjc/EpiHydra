@@ -13,6 +13,8 @@ from model.cnn import ExperimentArgs, EPCOTBackboneReg
 from model.striped_hyena import HyenaBackboneReg
 from model.transformer.diff_transformer import DiffTransformerReg, CNNDiffTransformerReg
 
+import glob
+
 os.environ['WANDB_MODE']='offline'
 
 cell='MPRA'
@@ -34,12 +36,13 @@ lr = 0.0001
 weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-experiment_name = f'lr{lr}-{loss_type}-3striped-dp0.1'
+# experiment_name = f'lr{lr}-{loss_type}-3striped-abs-dp0.1'
+experiment_name = f'lr{lr}-{loss_type}-4striped-abs-dp0.1'
 epochs = 50
 if project_name == 'test':
     epochs = 1
 
-batch_size=16
+batch_size=32
 args = ExperimentArgs(loss_type=loss_type,
                       # from_ckpt='models/pretrain_dnase.pt',
                       dnase=dnase,
@@ -96,7 +99,7 @@ trainer = Trainer(
     max_epochs=epochs,accelerator='gpu',
     logger=wandb_logger, default_root_dir=f'./weight/{project_name}',
     log_every_n_steps=1,
-    accumulate_grad_batches=2,
+    # accumulate_grad_batches=2,
     precision='bf16-mixed',
     # profiler=profiler
 )
@@ -107,15 +110,19 @@ validloader = DataLoader(validset, batch_size=batch_size, shuffle=True, drop_las
 
 trainer.fit(
     model, trainloader, validloader,
-    # ckpt_path='weight/MPRA-EPCOT_DiffT/lr0.0001-mse-4striped-bn-dp0.1/lr0.0001-mse-4striped-bn-dp0.1-latest-v3.ckpt'
+    # ckpt_path='weight/MPRA-EPCOT_DiffT/lr0.0001-mse-3striped-abs-dp0.1/lr0.0001-mse-3striped-abs-dp0.1-latest.ckpt'
 )
 
 model.test_length=len(testset)
 testloader= DataLoader(testset,batch_size=batch_size, drop_last=False, num_workers=16)
+test_ckpt = glob.glob(f'weight/{project_name}/{experiment_name}/epoch=*-val_pr=*.ckpt')
+if len(test_ckpt)==0:
+    test_ckpt = None
 trainer.test(
     model, testloader,
-    # ckpt_path='weight/Reg-EPCOT-200bp/lr0.0001-bce-dnase-EPCOT_DiffT_no_linear/lr0.0001-bce-dnase-EPCOT_DiffT_no_linear-latest.ckpt'
+    ckpt_path=test_ckpt,
 )
+
 
 print()
 # ws.Beep(1, 3)
