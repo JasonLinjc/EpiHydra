@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, Subset
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 from model import utils
 from model.cnn import ExperimentArgs, EPCOTBackboneReg
@@ -37,7 +38,7 @@ weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
 # experiment_name = f'lr{lr}-{loss_type}-3striped-abs-dp0.1'
-experiment_name = f'lr{lr}-{loss_type}-4striped-abs-dp0.1'
+experiment_name = f'lr{lr}-{loss_type}-3ba-dp0.1'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -71,8 +72,11 @@ if project_name=='test':
     # testset=Subset(testset,range(20))
     wandb_logger = None
 else:
-    wandb_logger=WandbLogger(name=experiment_name, project=project_name, save_dir='./weight/')
-    wandb_logger.watch(model, log='all', log_freq=100)
+    wandb_logger=WandbLogger(name=experiment_name, project=project_name, save_dir='./weight/',
+                             # init=dict(
+        # settings=wandb.Settings(_disable_meta=True, _disable_stats=True))
+    )
+    # wandb_logger.watch(model, log='all', log_freq=100)
     # wandb_logger = None
 
 checkpoint_callback = ModelCheckpoint(
@@ -118,6 +122,8 @@ testloader= DataLoader(testset,batch_size=batch_size, drop_last=False, num_worke
 test_ckpt = glob.glob(f'weight/{project_name}/{experiment_name}/epoch=*-val_pr=*.ckpt')
 if len(test_ckpt)==0:
     test_ckpt = None
+else:
+    test_ckpt = test_ckpt[0]
 trainer.test(
     model, testloader,
     ckpt_path=test_ckpt,

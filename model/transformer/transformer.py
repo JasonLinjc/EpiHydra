@@ -173,3 +173,4 @@ class Transformer(nn.Module):
         # return hs.transpose(1, 2), memory[:h * w].permute(1, 2, 0).view(bs, c, h, w)
 
 
+

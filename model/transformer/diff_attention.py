@@ -136,18 +136,20 @@ class MultiheadFlashDiff2(nn.Module):
         return rel_pos
 
 class DiffAttnLayer(nn.Module):
-    def  __init__(self, embed_dim, depth, max_seq_len, num_heads, output_project=False, dropout=0.1):
+    def  __init__(self, hidden_dim, depth, max_seq_len, num_heads, output_project=False, dropout=0.1):
         super().__init__()
-        self.attn_layer = MultiheadFlashDiff2(embed_dim=embed_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=output_project)
+        self.attn_layer = MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=output_project)
         self.dropout = nn.Dropout(dropout)
-        self.norm = RMSNorm(embed_dim, eps=1e-5, elementwise_affine=True)
+        self.norm = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
     def forward(self, x):
         x = x.transpose(1,2)
         shortcut=x
-        x = self.norm(x)
+
         x = self.attn_layer(x)
         x = self.dropout(x)
+
         x = x+shortcut
+        x = self.norm(x)
         return x.transpose(1,2)
 
 def lambda_init_fn(depth):

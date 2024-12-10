@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from model.cnn import EPCOTConvLayer, EPCOTEncoder
+from model.ffn import SwishGLU
 from model.hyper_model import RegHyperModel, ClassHyperModel
 from model.transformer.diff_attention import MultiheadFlashDiff2, DiffAttnLayer
 from model.transformer.rms_norm import RMSNorm
@@ -77,49 +78,40 @@ class CNNDiffTransformerReg(RegHyperModel):
         self.conv_block1 = nn.Sequential(
             EPCOTConvLayer(4, 256, kernel_size=10),
             nn.Dropout(p=args.dropout),
-            # EPCOTConvLayer(256, 256, kernel_size=10),
-            DiffAttnLayer(256, 0, 200, 4)
+            EPCOTConvLayer(256, 256, kernel_size=10),
+            # DiffAttnLayer(256, 1, 200, 4)
             # MultiheadFlashDiff2(embed_dim=256, depth=0, max_seq_len=200, num_heads=4),
         )
         self.conv_block2 = nn.Sequential(
             EPCOTConvLayer(256, 360, kernel_size=8),
             nn.Dropout(p=args.dropout),
-            DiffAttnLayer(360, 1, 40, 4)
-            # MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=40, num_heads=4),
-            # EPCOTConvLayer(360, 512, kernel_size=8),
-        )
-        self.conv_block3 = nn.Sequential(
+            # DiffAttnLayer(360, 3, 40, 4)
             EPCOTConvLayer(360, 512, kernel_size=8),
-            nn.Dropout(p=args.dropout),
-            DiffAttnLayer(512, 2, 10, 4)
-            # MultiheadFlashDiff2(embed_dim=512, depth=2, max_seq_len=10, num_heads=4),
-
-            # EPCOTConvLayer(360, 512, kernel_size=8),
         )
+        # self.conv_block3 = nn.Sequential(
+        #     EPCOTConvLayer(360, 512, kernel_size=8),
+        #     nn.Dropout(p=args.dropout),
+        #     DiffAttnLayer(512, 5, 10, 4)
+        #
+        #     # EPCOTConvLayer(360, 512, kernel_size=8),
+        # )
         # self.conv_block4 = nn.Sequential(
         #     # nn.BatchNorm1d(512),
         #     EPCOTConvLayer(512, 512, kernel_size=8),
         #     # nn.BatchNorm1d(512),
         #     nn.Dropout(p=args.dropout),
-        #     DiffAttnLayer(512, 3, 10, 4)
+        #     DiffAttnLayer(512, 7, 10, 4)
         #     # MultiheadFlashDiff2(embed_dim=512, depth=3, max_seq_len=10, num_heads=4),
         #     # nn.BatchNorm1d(512),
         #     # EPCOTConvLayer(360, 512, kernel_size=8),
         # )
-        # self.diff_t = nn.Sequential(
-        #     MultiheadFlashDiff2(embed_dim=360, depth=0, max_seq_len=10, num_heads=4),
-        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
-        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
-        #     MultiheadFlashDiff2(embed_dim=360, depth=1, max_seq_len=10, num_heads=4),
-        # )
 
-        # self.diff_t = nn.Sequential(
-        #     # nn.Linear(360, 512, bias=False),
-        #     MultiheadFlashDiff2(embed_dim=512, depth=0, max_seq_len=10, num_heads=4, output_project=False),
-        #     MultiheadFlashDiff2(embed_dim=512, depth=1, max_seq_len=10, num_heads=4, output_project=False),
-        #     # DiffTransformerLayer(512, 4, 10, 0, 1024),
-        #     # DiffTransformerLayer(512, 4, 10, 1, 1024)
-        # )
+        self.diff_t = nn.Sequential(
+            DiffAttnLayer(512, 4, 10, 4),
+            DiffAttnLayer(512, 5, 10, 4),
+            # DiffTransformerLayer(512, 4, 10, 4, args.dropout),
+            # DiffTransformerLayer(512, 4, 10, 5, args.dropout)
+        )
 
         self.pooling_layer1 = nn.Sequential(
             nn.MaxPool1d(kernel_size=5, stride=5),
@@ -128,7 +120,7 @@ class CNNDiffTransformerReg(RegHyperModel):
         )
         self.pooling_layer2 = nn.Sequential(
             nn.MaxPool1d(kernel_size=4, stride=4),
-            nn.BatchNorm1d(360),
+            nn.BatchNorm1d(512),
             nn.Dropout(p=args.dropout),
         )
 
@@ -164,9 +156,9 @@ class CNNDiffTransformerReg(RegHyperModel):
         x = self.pooling_layer1(x)
         x = self.conv_block2(x)
         x = self.pooling_layer2(x)
-        x = self.conv_block3(x)
+        # x = self.conv_block3(x)
         # x = self.conv_block4(x)
-        # x = self.diff_t(x.transpose(1,2))
+        x = self.diff_t(x)
 
         output = self.classifier(x)
         return {'output': output}
@@ -248,32 +240,21 @@ class DiffTransformerClass(ClassHyperModel):
         return bce
 
 class DiffTransformerLayer(nn.Module):
-    def __init__(self, hidden_dim, num_heads, max_seq_len, depth, dim_feedforward):
+    def __init__(self, hidden_dim, num_heads, max_seq_len, depth, dropout):
         super().__init__()
-        self.attn_layer = nn.Sequential(
-            MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=False),
-            nn.Dropout(p=0.1),
-        )
+        self.attn_layer = DiffAttnLayer(hidden_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, dropout=dropout)
 
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, dim_feedforward),
-            nn.ReLU(),
-            # nn.LayerNorm([max_seq_len-9, dim_feedforward]),
-            nn.Linear(dim_feedforward, hidden_dim),
-            nn.Dropout(p=0.1),
-            # nn.ReLU(),
-        )
-        self.rms_norm1 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
-        self.rms_norm2 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        self.ffn = SwishGLU(hidden_dim, 2 * hidden_dim, dropout=dropout)
+        # self.rms_norm1 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        # self.rms_norm2 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
         # self.rms_norm2 = nn.LayerNorm([max_seq_len-9, hidden_dim])
 
     def forward(self, x):
-        short_cut = x
         x = self.attn_layer(x)
-        x = short_cut+x
-        x = self.rms_norm1(x)
-        short_cut = x
+
+        # x = self.rms_norm1(x)
+
         x = self.ffn(x)
-        x = x+short_cut
-        x = self.rms_norm2(x)
+
+        # x = self.rms_norm2(x)
         return x
