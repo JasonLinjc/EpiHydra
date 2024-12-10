@@ -5,4 +5,5 @@ This repository contains realizations of CNN from EPCOT, differential attention 
 
 ## Reference
 EPCOT: https://academic.oup.com/nar/article/51/12/5931/7177889
+
 Differential Transformer: http://arxiv.org/abs/2410.05258
