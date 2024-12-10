@@ -13,3 +13,5 @@ pip install -r requirements.txt
 EPCOT: https://academic.oup.com/nar/article/51/12/5931/7177889
 
 Differential Transformer: http://arxiv.org/abs/2410.05258
+
+Striped Hyena: https://www.science.org/doi/10.1126/science.ado9336
