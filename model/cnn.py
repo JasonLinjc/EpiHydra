@@ -84,15 +84,31 @@ class EPCOTBackboneClass(ClassHyperModel):
 class EPCOTBackboneReg(RegHyperModel):
     def __init__(self, args):
         super().__init__()
+        self.loss_type = args.loss_type
         self.backbone = EPCOTEncoder(4)
-        self.backbone = torch.compile(self.backbone, fullgraph=True, dynamic=False, mode='max-autotune')
+        # self.backbone = torch.compile(self.backbone, fullgraph=True, dynamic=False, mode='max-autotune')
         self.classifier = nn.Sequential(
-            nn.Linear(10, 1),
-            nn.Flatten(-2,-1),
+            nn.Flatten(-2, -1),
+            nn.Linear(5120, 128),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
-            nn.Linear(512, 3),
+            nn.BatchNorm1d(128),
+            nn.Linear(128, 3),
         )
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                torch.nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+            if isinstance(m, nn.Conv1d):
+                torch.nn.init.kaiming_uniform_(m.weight)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+
+        # for m in self.backbone.modules():
+        #     if isinstance(m, nn.Conv1d):
+        #         torch.nn.init.kaiming__(m.weight)
+        #         if m.bias is not None:
+        #             torch.nn.init.constant_(m.bias, 0)
 
         self.lr = args.lr
         self.best_val_pr= 0
@@ -105,13 +121,21 @@ class EPCOTBackboneReg(RegHyperModel):
         output = self.classifier(x)
         return {'output': output}
 
-    def calculate_loss(self, target, output, mask=None):
+    def calculate_loss(self, target, output, mask=None, mode='train'):
         if mask is not None:
             target = target[mask]
             output = output[mask]
 
-        loss = F.mse_loss(output, target)
-        return loss
+        output = output.float()
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+
+        return loss[0]
+
 class EPCOTConvLayer(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size):
         super().__init__()
@@ -123,36 +147,50 @@ class EPCOTConvLayer(nn.Module):
         x = self.act(x)
         return x
 
+
 class EPCOTEncoder(nn.Module):
     def __init__(self, in_dim):
         super().__init__()
 
-        self.conv_block1 = nn.Sequential(
-            EPCOTConvLayer(in_dim, 256, kernel_size=10),
-            nn.Dropout(p=0.1),
-            EPCOTConvLayer(256, 256, kernel_size=10),
-        )
-        self.conv_block2 = nn.Sequential(
-            EPCOTConvLayer(256, 360, kernel_size=8),
-            nn.Dropout(p=0.1),
-            EPCOTConvLayer(360, 360, kernel_size=8),
-        )
-        self.conv_block3 = nn.Sequential(
-            EPCOTConvLayer(360, 512, kernel_size=8),
-            nn.Dropout(p=0.2),
-            EPCOTConvLayer(512, 512, kernel_size=8),
-            nn.BatchNorm1d(512),
-            nn.Dropout(p=0.2),
-        )
+        # self.conv_block1 = nn.Sequential(
+        #     EPCOTConvLayer(in_dim, 256, kernel_size=10),
+        #     nn.Dropout(p=0.1),
+        #     EPCOTConvLayer(256, 256, kernel_size=10),
+        # )
+        # self.conv_block2 = nn.Sequential(
+        #     EPCOTConvLayer(256, 360, kernel_size=8),
+        #     nn.Dropout(p=0.1),
+        #     EPCOTConvLayer(360, 360, kernel_size=8),
+        # )
+        # self.conv_block3 = nn.Sequential(
+        #     EPCOTConvLayer(360, 512, kernel_size=8),
+        #     nn.Dropout(p=0.2),
+        #     EPCOTConvLayer(512, 512, kernel_size=8),
+        #     nn.BatchNorm1d(512),
+        #     nn.Dropout(p=0.2),
+        # )
+        #
+        # self.pooling_layer1 = nn.Sequential(
+        #     nn.MaxPool1d(kernel_size=5, stride=5),
+        #     nn.BatchNorm1d(256),
+        #     nn.Dropout(p=0.1),
+        # )
+        # self.pooling_layer2 = nn.Sequential(
+        #     nn.MaxPool1d(kernel_size=4, stride=4),
+        #     nn.BatchNorm1d(360),
+        #     nn.Dropout(p=0.1),
+        # )
+
+        self.conv_block1 = EPCOTConvBlock(4,256, 0.1,10)
+        self.conv_block2 = EPCOTConvBlock(256,360, 0.1, 8)
+        self.conv_block3 = EPCOTConvBlock(360,512, 0.1, 8)
 
         self.pooling_layer1 = nn.Sequential(
             nn.MaxPool1d(kernel_size=5, stride=5),
-            nn.BatchNorm1d(256),
             nn.Dropout(p=0.1),
         )
         self.pooling_layer2 = nn.Sequential(
             nn.MaxPool1d(kernel_size=4, stride=4),
-            nn.BatchNorm1d(360),
             nn.Dropout(p=0.1),
         )
 
@@ -163,4 +201,32 @@ class EPCOTEncoder(nn.Module):
         x = self.conv_block2(x)
         x = self.pooling_layer2(x)
         x = self.conv_block3(x)
+
+        return x
+
+class EPCOTConvBlock(nn.Module):
+    def __init__(self, in_dim, out_dim, dropout, kernel_size):
+        super().__init__()
+        self.conv1 = EPCOTConvLayer(in_dim, out_dim, kernel_size)
+        self.dropout = nn.Dropout(p=dropout)
+        self.conv2 = EPCOTConvLayer(out_dim, out_dim, kernel_size)
+
+        self.norm = nn.BatchNorm1d(out_dim)
+
+        if in_dim!=out_dim:
+            self.res_conv = nn.Conv1d(in_dim, out_dim, kernel_size=1)
+        else:
+            self.res_conv = None
+
+    def forward(self, x):
+        short_cut = x
+        if self.res_conv is not None:
+            short_cut = self.res_conv(short_cut)
+
+        x = self.conv1(x)
+        x = self.dropout(x)
+        x = self.conv2(x)
+        x = x+short_cut
+        x = self.norm(x)
+
         return x
