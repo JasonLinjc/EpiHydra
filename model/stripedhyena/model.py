@@ -11,6 +11,7 @@ from .cache import InferenceParams, RecurrentInferenceParams
 from .engine import HyenaInferenceEngine
 from .layers import ParallelGatedMLP, RMSNorm, VocabParallelEmbedding
 from .utils import column_split, print_rank_0
+from ..transformer.diff_attention import DiffAttnLayer
 from ..utils import disable_compile_decorator, compile_decorator
 
 try:
@@ -160,17 +161,19 @@ class ParallelHyenaFilter(nn.Module):
             return self.parallel_forward(u, inference_params, padding_mask)
 
     def parallel_forward(self, u, inference_params=None, padding_mask=None):
+        # inference_params是什么？是否为空？
         L = u.shape[1]
         z_pre, fir_state = self.engine.parallel_fir(
             self.fir_fn,
-            u,
-            self.short_filter_weight,
-            self.short_filter_bias,
-            L,
-            fir_length=self.short_filter_length,
+            u, # 输入
+            self.short_filter_weight, # 卷积权重
+            self.short_filter_bias, # 卷积偏置
+            L, # ？
+            fir_length=self.short_filter_length, # ？
             inference_params=inference_params,
             padding_mask=padding_mask,
-        )#
+        )# 如果没用flash fft，则这行等效为一个F.conv1d的操作
+
         if inference_params:
             inference_params.fir_state_dict[self.layer_idx] = fir_state
 
@@ -226,12 +229,12 @@ class ParallelHyenaFilter(nn.Module):
 
         z_pre, fir_state = self.engine.step_fir(
             u, fir_state, weight=self.short_filter_weight, bias=self.short_filter_bias
-        )
+        )# 似乎是短卷积操作
         x2, x1, v = (
             column_split(z_pre, self.num_attention_heads, self.hidden_size_per_attention_head)
             if self.column_split_hyena
             else z_pre.split([self.hidden_size, self.hidden_size, self.hidden_size], dim=1)
-        )
+        )# 应该是把一个张量分成三份
 
         y, iir_state = self.engine.step_iir(
             x2,
@@ -251,6 +254,7 @@ class ParallelHyenaFilter(nn.Module):
 
     @disable_compile_decorator
     def update_time(self, L, device):
+        # 似乎是用来生成离散时间序列的函数
         """
         Set [0, 1, ..., L-1] where L is the length of the current batch of inputs.
         If L is greater than the length of the previous batch, then the time vector is
@@ -270,12 +274,13 @@ class ParallelHyenaFilter(nn.Module):
         residues, log_poles = (
             torch.view_as_complex(self.residues.to(filter_dtype)),
             torch.view_as_complex(self.poles.to(filter_dtype)).log(),
-        )
+        )# 将两个张量解释成复数张量，之后便可以按复数的法则进行运算，这两个张量的最后一个维度必须为2
         h = (residues * (log_poles * self.t).exp()).real.sum(1)[None]
         return h, filter_dtype, log_poles, residues
 
 
 class ParallelGatedConvBlock(nn.Module):
+    # Hyena block
     def __init__(self, config, layer_idx) -> None:
         super().__init__()
         self.config = config
@@ -284,22 +289,16 @@ class ParallelGatedConvBlock(nn.Module):
         dtype = config.get("hyena_block_dtype", torch.float32)
         mlp_dtype = config.get("mlp_dtype", torch.bfloat16)
         self.pre_norm, self.post_norm = RMSNorm(config).to(dtype=dtype), RMSNorm(config).to(dtype=dtype)
+
         self.filter = ParallelHyenaFilter(config, layer_idx).to(dtype=dtype)
 
         self.projections = nn.Linear(config.hidden_size, 3 * config.hidden_size)# input projection
-        # self.projections.forward = torch.compile(self.projections.forward, fullgraph=True, dynamic=False, mode='max-autotune')
-
         self.out_filter_dense = nn.Linear(config.hidden_size, config.hidden_size).to(dtype)
+
         self.mlp = ParallelGatedMLP(config).to(dtype=mlp_dtype)
 
         self.proj_norm_fn = self.proj_norm
         self.res_mlp_norm_fn = self.res_mlp_norm
-
-        # if self.config.get("compile", False):
-        # self.proj_norm_fn = torch.compile(self.proj_norm, fullgraph=True, dynamic=False, mode="max-autotune")
-        # self.res_mlp_norm_fn = torch.compile(
-        #     self.res_mlp_norm, fullgraph=True, dynamic=False, mode="max-autotune"
-        # )
 
     def proj_norm(self, x):
         x = self.pre_norm(x)
@@ -310,19 +309,19 @@ class ParallelGatedConvBlock(nn.Module):
 
     # @torch.compile(fullgraph=False, dynamic=False, mode='max-autotune')
     def forward(self, u, inference_params=None, padding_mask=None, *args, **kwargs):
-        z = self.proj_norm_fn(u)
+        z = self.proj_norm_fn(u) # 先对输入进行RMSNorm
 
         if type(padding_mask) == torch.Tensor:  # guard against bias
             z = z * padding_mask[..., None]
 
         z, inference_params = self.filter(z, inference_params=inference_params, padding_mask=padding_mask)
 
-        z_in = self.out_filter_dense(z) + u
+        z_in = self.out_filter_dense(z) + u # 过线性层和残差连接，u未经过归一化
 
         if type(padding_mask) == torch.Tensor:  # guard against bias
             z_in = z_in * padding_mask[..., None]
 
-        y = self.res_mlp_norm_fn(self.post_norm(z_in))
+        y = self.res_mlp_norm_fn(self.post_norm(z_in)) # 过线性层后再正则化，最后过一个GLU
 
         return y, inference_params
 
@@ -330,6 +329,7 @@ class ParallelGatedConvBlock(nn.Module):
 def get_block(config, layer_idx, flash_fft=None):
     if layer_idx in config.attn_layer_idxs:
         return AttentionBlock(config, layer_idx)
+        # return DiffAttnLayer(config.hidden_size, layer_idx, 200, 4, dropout=0.1)
     elif layer_idx in config.hyena_layer_idxs:
         block = ParallelGatedConvBlock(config, layer_idx)
         if config.get("use_flashfft", "False"):
@@ -344,6 +344,7 @@ class StripedHyena(nn.Module):
         super().__init__()
         self.config = config
         self.embedding_layer = VocabParallelEmbedding(config)
+        self.input_embed = nn.Conv1d(4, 256, kernel_size=10, padding='same')
         self.norm = RMSNorm(config) if config.get("final_norm", True) else None
         self.unembed = self.embedding_layer if config.tie_embeddings else VocabParallelEmbedding(config)
 
@@ -362,8 +363,10 @@ class StripedHyena(nn.Module):
         )
 
     def forward(self, x, inference_params_dict=None, padding_mask=None):
+
         L = x.shape[1]
-        x = self.embedding_layer.embed(x)
+        x = self.input_embed(x).transpose(1,2)
+        # x = self.embedding_layer.embed(x)
         if inference_params_dict is not None:
             x, inference_params_dict_out = self.stateful_forward(
                 x,
@@ -373,7 +376,7 @@ class StripedHyena(nn.Module):
             x, inference_params_dict_out = self.stateless_forward(x, padding_mask=padding_mask)
 
         x = self.norm(x)
-        x = self.unembed.unembed(x)
+        # x = self.unembed.unembed(x)
         return x, inference_params_dict_out
 
     def stateful_forward(self, x, inference_params_dict=None):

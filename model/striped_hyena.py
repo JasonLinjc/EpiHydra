@@ -58,13 +58,20 @@ class HyenaBackboneClass(ClassHyperModel):
 
         return loss[0]
 
+
 class HyenaBackboneReg(RegHyperModel):
     def __init__(self, args, config_path="./configs/sh-stem-test.yml"):
         super().__init__()
         config = dotdict(yaml.load(open(config_path), Loader=yaml.FullLoader))
         self.backbone = StripedHyena(config)
 
-        self.regressor = FFN(length=200, dim=5, output_dim=3)
+        self.regressor = nn.Sequential(
+            nn.Linear(200,1),
+            nn.Flatten(-2, -1),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Linear(256,3)
+        )
 
         self.dnase = args.dnase
         # if not args.dnase:
@@ -78,20 +85,46 @@ class HyenaBackboneReg(RegHyperModel):
 
         self.best_val_pr = 0
 
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                torch.nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+
     # @disable_compile_decorator
     # @torch.compile(fullgraph=False, dynamic=False, mode='max-autotune')
     def forward(self, x):
-        x = self.backbone(x-7)
+        x = seq2onehot(x)
+        x = self.backbone(x)[0]
 
-        output = self.regressor(x[0])
+        output = self.regressor(x.transpose(1, 2))
+        # output = x
         return {'output': output}
 
     # @compile_decorator
-    def calculate_loss(self, target, output):
+    def calculate_loss(self, target, mode, output):
         # if mask is not None:
         #     target = target[mask]
         #     output = output[mask]
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+        if 'l1' in self.loss_type:
+            l1 = F.l1_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_l1', l1, on_step=True, on_epoch=True)
+            loss.append(l1)
+        if 'kl' in self.loss_type:
+            kl = F.kl_div(F.log_softmax(output), F.log_softmax(target))
+            if mode != 'test':
+                self.log(mode + '_kl', kl, on_step=True, on_epoch=True)
+            loss.append(kl)
 
-        loss = F.mse_loss(output, target)
-
-        return loss
+        if len(loss) > 1:
+            loss = self.loss_balancer(loss)
+            return loss
+        else:
+            return loss[0]

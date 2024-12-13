@@ -8,17 +8,18 @@ class FFN(nn.Module):
     def __init__(self, length, dim, output_dim):
         super().__init__()
         self.ffn = nn.Sequential(
-            nn.Linear(dim, 1),
+            nn.Linear(dim*length, 128),
             nn.Flatten(-2,-1),
-            nn.BatchNorm1d(length),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Linear(length, output_dim)
+            nn.Linear(128, output_dim)
         )
 
     # @compile_decorator
     def forward(self, x):
         x = self.ffn(x)
         return x
+
 
 class SwishGLU(nn.Module):
     def __init__(self, embed_dim, hidden_dim, dropout=0.1):

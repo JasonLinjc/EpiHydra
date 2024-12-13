@@ -73,6 +73,7 @@ class ParallelGatedMLP(nn.Module):
             out_features=config.hidden_size,
             bias=False,
         )
+
     # @compile_decorator
     def forward(self, z):
         z1, z2 = self.l1(z), self.l2(z)

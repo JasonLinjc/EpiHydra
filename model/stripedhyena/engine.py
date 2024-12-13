@@ -66,11 +66,11 @@ class HyenaInferenceEngine:
 
     def parallel_fir(
         self,
-        fir_fn,
+        fir_fn, # 可能为F.conv1d
         u,
         weight,
         bias,
-        L,
+        L, # ？
         fir_length=3,
         inference_params=None,
         prefill_mode=None,
@@ -81,7 +81,7 @@ class HyenaInferenceEngine:
         if fir_fn != torch.nn.functional.conv1d:
             z_pre = fir_fn(u)[:, :L]  # B, L, D
             z_pre = z_pre.permute(0, 2, 1)
-        else:
+        else: # 如果是conv1d则执行
             u = u.permute(0, 2, 1)  # B, D, L
             z_pre = fir_fn(
                 u,
@@ -89,8 +89,8 @@ class HyenaInferenceEngine:
                 bias=None,  # don't pass it here, add manually instead!  source of small error
                 stride=1,
                 padding=fir_length - 1,
-                groups=u.shape[1],
-            )[..., :L]
+                groups=u.shape[1], # u.shape[1]为通道数
+            )[..., :L] # 为什么要强调:L？
 
             # add manually instead!  source of small error
             z_pre = z_pre + bias[None, :, None]
@@ -233,8 +233,8 @@ class HyenaInferenceEngine:
         `fir_state` contains the last `short_filter_length - 1` elements of `u`: `u_(L-2), u_{L-1), ...`
         We assume dimensions of `short_filter_weight` to be `[d, 1, short_filter_len]` (SISO / multi SISO layout).
         """
-        h0, h = weight[..., 0, -1], weight[..., 0, :-1]
-        h0, h = h0[None], h[None]
+        h0, h = weight[..., 0, -1], weight[..., 0, :-1] # 将权重的最后一位取出， 作为h0
+        h0, h = h0[None], h[None] #
         y = h0 * u + torch.sum(fir_state * h, dim=-1) + bias
 
         # update
@@ -243,7 +243,7 @@ class HyenaInferenceEngine:
         return y, fir_state
 
     def step_iir(self, x2, x1, v, D, residues, poles, iir_state, iir_groups=1):
-        x1v = x1 * v
+        x1v = x1 * v # x1和v实现门控
 
         residues, poles = (
             torch.view_as_complex(residues.to(torch.float32)),

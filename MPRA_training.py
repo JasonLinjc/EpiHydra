@@ -22,8 +22,8 @@ cell='MPRA'
 project_name=cell+'-EPCOT_DiffT'
 # project_name='test'
 dec_layers = 3
-enc_layers = 3
-
+enc_layers = 12
+hidden_dim = 256
 loss_type = 'mse'
 freeze_backbone = False
 num_class = 12
@@ -37,7 +37,7 @@ weight_decay = 1e-6
 
 # experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
 # experiment_name = f'lr{lr}-{loss_type}-3striped-abs-dp0.1'
-experiment_name = f'{loss_type}-1bp2bp_insert'
+experiment_name = f'{loss_type}-12/256-diff_t_cnn_embed'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -53,14 +53,14 @@ args = ExperimentArgs(loss_type=loss_type,
                       max_seq_len=max_seq_len,
                       num_heads=num_heads,
                       compile=False,
-                      dropout=0.1)
+                      dropout=0.1,
+                      hidden_dim=hidden_dim)
 
 
 
 # model = EPCOTBackboneReg(args)
 # model = DiffTransformerReg(args)
 # model = HyenaBackboneReg(args)
-
 model = CNNDiffTransformerReg(args)
 
 trainset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='train')
@@ -117,7 +117,7 @@ trainer.fit(
 )
 
 model.test_length=len(testset)
-testloader = DataLoader(testset,batch_size=batch_size, drop_last=False, num_workers=16)
+testloader = DataLoader(testset,batch_size=batch_size, drop_last=False, num_workers=1)
 test_ckpt = glob.glob(f'weight/{project_name}/{experiment_name}/epoch=*-val_pr=*.ckpt')
 
 if len(test_ckpt)==0:
