@@ -89,7 +89,7 @@ class EPCOTBackboneReg(RegHyperModel):
         # self.backbone = torch.compile(self.backbone, fullgraph=True, dynamic=False, mode='max-autotune')
         self.classifier = nn.Sequential(
             nn.Flatten(-2, -1),
-            nn.Linear(5120, 128),
+            nn.Linear(1280, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
             nn.Linear(128, 3),
@@ -181,52 +181,75 @@ class EPCOTEncoder(nn.Module):
         #     nn.Dropout(p=0.1),
         # )
 
-        self.conv_block1 = EPCOTConvBlock(4,256, 0.1,10)
-        self.conv_block2 = EPCOTConvBlock(256,360, 0.1, 8)
-        self.conv_block3 = EPCOTConvBlock(360,512, 0.1, 8)
+        self.conv_block1 = nn.Sequential(
+            EPCOTConvBlock(4,128, 0.1,10, 200),
+            EPCOTConvBlock(128, 128, 0.1, 10, 200),
+            # EPCOTConvBlock(128, 128, 0.1, 10, 200),
+            # EPCOTConvBlock(128, 128, 0.1, 10, 200),
+        )
+        self.conv_block2 = nn.Sequential(
+            EPCOTConvBlock(128,128, 0.1, 8, 40),
+            EPCOTConvBlock(128, 128, 0.1, 8, 40),
+            # EPCOTConvBlock(256, 256, 0.1, 8, 40),
+            # EPCOTConvBlock(256, 256, 0.1, 8, 40),
+        )
+
+
+        self.conv_block3 = nn.Sequential(
+            EPCOTConvBlock(128,128, 0.1, 8, 10),
+            EPCOTConvBlock(128, 128, 0.1, 8, 10),
+            # EPCOTConvBlock(256, 256, 0.1, 8, 10),
+            # EPCOTConvBlock(256, 256, 0.1, 8, 10),
+        )
 
         self.pooling_layer1 = nn.Sequential(
             nn.MaxPool1d(kernel_size=5, stride=5),
+            nn.BatchNorm1d(128),
             nn.Dropout(p=0.1),
         )
         self.pooling_layer2 = nn.Sequential(
             nn.MaxPool1d(kernel_size=4, stride=4),
+            nn.BatchNorm1d(128),
             nn.Dropout(p=0.1),
         )
-
+    @torch.compile(fullgraph=True, dynamic=False, mode='max-autotune')
     def forward(self, x):
 
         x = self.conv_block1(x)
+        # x = self.conv_block2(x)
         x = self.pooling_layer1(x)
+
         x = self.conv_block2(x)
+        # x = self.conv_block4(x)
         x = self.pooling_layer2(x)
+
+        # x = self.conv_block5(x)
         x = self.conv_block3(x)
 
         return x
 
 class EPCOTConvBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, dropout, kernel_size):
+    def __init__(self, in_dim, out_dim, dropout, kernel_size, length):
         super().__init__()
         self.conv1 = EPCOTConvLayer(in_dim, out_dim, kernel_size)
         self.dropout = nn.Dropout(p=dropout)
         self.conv2 = EPCOTConvLayer(out_dim, out_dim, kernel_size)
 
-        self.norm = nn.BatchNorm1d(out_dim)
+        self.norm = nn.LayerNorm([out_dim, length])
 
-        if in_dim!=out_dim:
-            self.res_conv = nn.Conv1d(in_dim, out_dim, kernel_size=1)
+        if in_dim==out_dim:
+            self.res = True
         else:
-            self.res_conv = None
+            self.res = False
 
     def forward(self, x):
         short_cut = x
-        if self.res_conv is not None:
-            short_cut = self.res_conv(short_cut)
 
         x = self.conv1(x)
         x = self.dropout(x)
         x = self.conv2(x)
-        x = x+short_cut
+        if self.res:
+            x = x+short_cut
         x = self.norm(x)
 
         return x
