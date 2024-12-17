@@ -1,8 +1,11 @@
 import torch
 from sklearn.metrics import precision_recall_curve, auc, roc_auc_score
 from scipy.stats import pearsonr
+from tokenizers import Tokenizer
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.functional import pad
+from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer
 # from src.dataloaders.utils.mlm import mlm_getitem
 import pandas as pd
@@ -19,13 +22,16 @@ import torch.nn.functional as F
 def compile_decorator(func):
     return torch.compile(func, fullgraph=True, dynamic=False, mode='max-autotune')
 
+
 def disable_compile_decorator(func):
     return torch._dynamo.disable(func, recursive=True)
+
 
 class MPRADataset(torch.utils.data.Dataset):
     def __init__(self, path, set_type):
         self.set_type = set_type
-        self.tokenizer = Tokenizer(200)
+        # self.tokenizer = Tokenizer(200)
+        self.tokenizer = Tokenizer.from_file('./bpe.json')
 
         activity_columns = ['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC', 'sequence', 'type']
         self.data = pd.read_csv(path, usecols=activity_columns)
@@ -38,10 +44,24 @@ class MPRADataset(torch.utils.data.Dataset):
             item = random.randint(0, self.length-1)
             seq = self.data.iloc[item]['sequence']
 
-        seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+        p = random.random()
+        if p>=0.5:
+            seq = Seq(seq)
+            seq.reverse_complement()
+            seq = str(seq)
+
+        # seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+        seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
+
         seq = torch.LongTensor(seq)
-        if len(seq) > 200:
-            seq = seq[:200]
+
+        # if len(seq) > 200:
+        #     seq = seq[:200]
+        length = len(seq)
+        if length < 72:
+            temp = torch.zeros((72,), dtype=torch.int64)
+            temp[:length] = seq
+            seq = temp
 
         target = np.array(self.data.iloc[item].loc[['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC']],dtype=np.float32)
         return seq, target
@@ -65,7 +85,7 @@ class EPCOTDataset(torch.utils.data.Dataset):
             self.tokenizer = tokenizer
         else:
             # self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-            self.tokenizer = Tokenizer(max_length)
+            self.tokenizer = CaduceusTokenizer(max_length)
 
         self.data_augment = data_augment
         self.path = path
@@ -198,7 +218,7 @@ from typing import List, Sequence, Optional, Dict, Tuple
 from transformers import PreTrainedTokenizer
 
 
-class Tokenizer(PreTrainedTokenizer):
+class CaduceusTokenizer(PreTrainedTokenizer):
     model_input_names = ["input_ids"]
 
     def __init__(self,
