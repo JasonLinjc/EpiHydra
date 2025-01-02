@@ -1,18 +1,13 @@
-import torch
-from pytorch_lightning.profilers import AdvancedProfiler
-from torch import nn
 import os
 from torch.utils.data import DataLoader, Subset
 
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import wandb
 
 from model import utils
-from model.cnn import ExperimentArgs, EPCOTBackboneReg
-from model.striped_hyena import HyenaBackboneReg
-from model.transformer.diff_transformer import DiffTransformerReg, CNNDiffTransformerReg
+from model.cnn import ExperimentArgs, DeepCNNBLT
+from model.utils import get_callbacks
 
 import glob
 
@@ -22,7 +17,8 @@ cell='MPRA'
 project_name=cell+'-EPCOT_DiffT'
 # project_name='test'
 dec_layers = 3
-enc_layers = 12
+
+enc_layers = 3
 hidden_dim = 256
 loss_type = 'mse'
 freeze_backbone = False
@@ -35,9 +31,8 @@ num_heads=8
 lr = 0.0001
 weight_decay = 1e-6
 
-# experiment_name = f'lr{lr}-alpha{alpha}-beta{beta}-factor-contra{positive_threshold}-d_bn{d_bottle_neck}-ch{d_encoder}-{loss_type}-{d_model}_{n_layer}'
-# experiment_name = f'lr{lr}-{loss_type}-3striped-abs-dp0.1'
-experiment_name = f'{loss_type}-12/256-diff_t_cnn_embed'
+threshold=0.1
+experiment_name = f'{loss_type}-{threshold}-blt_deep_cnn-cross-rela'
 epochs = 50
 if project_name == 'test':
     epochs = 1
@@ -53,19 +48,25 @@ args = ExperimentArgs(loss_type=loss_type,
                       max_seq_len=max_seq_len,
                       num_heads=num_heads,
                       compile=False,
-                      dropout=0.1,
+                      dropout=0.3,
                       hidden_dim=hidden_dim)
 
 
-
 # model = EPCOTBackboneReg(args)
+model = DeepCNNBLT(args)
+# model = BassetBranched(args=args)
 # model = DiffTransformerReg(args)
 # model = HyenaBackboneReg(args)
-model = CNNDiffTransformerReg(args)
+# model = CNNDiffTransformerReg(args)
+# model = LegNet(args)
 
-trainset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='train')
-validset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='valid')
-testset = utils.MPRADataset('../EPCOT/Data/Table_S2__MPRA_dataset.txt', set_type='test')
+# trainset = utils.MPRADataset('./data/MPRA_dataset1.txt', set_type='train')
+# validset = utils.MPRADataset('./data/MPRA_dataset1.txt', set_type='valid')
+# testset = utils.MPRADataset('./data/MPRA_dataset1.txt', set_type='test')
+
+trainset = utils.MPRADataset('./data/MPRADataset_200.txt', set_type='train', patches_path='./0.1train_patching_mono.pkl')
+validset = utils.MPRADataset('./data/MPRADataset_200.txt', set_type='valid', patches_path='./0.1valid_patching_mono.pkl')
+testset = utils.MPRADataset('./data/MPRADataset_200.txt', set_type='test', patches_path='./0.1test_patching_mono.pkl')
 
 if project_name=='test':
     trainset=Subset(trainset,range(20))
@@ -75,36 +76,15 @@ if project_name=='test':
 else:
     wandb.init(settings=wandb.Settings(_disable_stats=True), name=experiment_name, project=project_name, dir='./weight', mode='offline')
     wandb_logger=WandbLogger(name=experiment_name, project=project_name, save_dir='./weight',)
-    # wandb_logger.watch(model, log='all', log_freq=100)
-    # wandb_logger = None
 
-checkpoint_callback = ModelCheckpoint(
-        monitor='val_pr',  # 监控验证集损失
-        dirpath=f'./weight/{project_name}/{experiment_name}/',
-        filename='{epoch:02d}-{val_pr:.2f}',
-        save_top_k=1,
-        mode='max'
-    )
-early_stopping = EarlyStopping(monitor='val_pr', patience=5, mode='max')
-checkpoint_callback_latest = ModelCheckpoint(
-    monitor=None,  # 不监控特定指标，只保存最新模型
-    save_top_k=1,  # 保存1个模型
-    dirpath=f'./weight/{project_name}/{experiment_name}/',  # 保存路径
-    filename=f'{experiment_name}-latest'  # 文件名格式
-)
-# profiler = AdvancedProfiler(dirpath='profile.txt')
+callbacks= get_callbacks(monitor='val_par', monitor_mode='max', project_name=project_name, experiment_name=experiment_name)
 trainer = Trainer(
-    callbacks=[
-        early_stopping,
-        checkpoint_callback,
-        checkpoint_callback_latest
-    ],
-    max_epochs=epochs,accelerator='gpu',
+    callbacks=callbacks,
+    max_epochs=epochs, accelerator='cuda',
     logger=wandb_logger, default_root_dir=f'./weight/{project_name}',
     log_every_n_steps=1,
     # accumulate_grad_batches=2,
     precision='bf16-mixed',
-    # profiler=profiler
 )
 
 # DataLoader
@@ -117,7 +97,7 @@ trainer.fit(
 )
 
 model.test_length=len(testset)
-testloader = DataLoader(testset,batch_size=batch_size, drop_last=False, num_workers=1)
+testloader = DataLoader(testset, batch_size=1, drop_last=False, num_workers=1)
 test_ckpt = glob.glob(f'weight/{project_name}/{experiment_name}/epoch=*-val_pr=*.ckpt')
 
 if len(test_ckpt)==0:
@@ -128,8 +108,8 @@ else:
 trainer.test(
     model, testloader,
     ckpt_path=test_ckpt,
+    # ckpt_path='weight/MPRA-EPCOT_DiffT/mse-12/256-diff_t_cnn_embed/epoch=18-val_pr=0.79.ckpt'
 )
-
 
 print()
 # ws.Beep(1, 3)

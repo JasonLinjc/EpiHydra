@@ -3,8 +3,8 @@ vocab_size: 5
 hidden_size: 256
 # Number of long convolution filters in each hyena block. Can be smaller than `hidden_size`
 num_filters: 256
-attn_layer_idxs: [1,3, 5]
-hyena_layer_idxs: [0, 2, 4]
+attn_layer_idxs: [2, 5]
+hyena_layer_idxs: [0, 1, 3, 4, 6, 7]
 num_layers: 6
 # Length of the short, depthwise FIR applied to input projections
 short_filter_length: 3 

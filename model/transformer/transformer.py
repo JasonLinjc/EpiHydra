@@ -1,10 +1,14 @@
 #most of the codes below are copied from Query2label and DETR
-import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn import MultiheadAttention
-from typing import Optional, List
+from typing import Optional
 import copy
+
+from model.ffn import SwishGLU
+from model.transformer.attention import AttnLayer
+
+
 def _get_activation_fn(activation):
     if activation == "relu":
         return nn.ReLU(inplace=True)
@@ -13,6 +17,29 @@ def _get_activation_fn(activation):
     if activation == "glu":
         return nn.GLU()
     raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
+
+
+class FlashTransformerLayer(nn.Module):
+    def __init__(self, hidden_dim, num_heads, max_seq_len, causal, dropout):
+        super().__init__()
+        self.attn_layer = AttnLayer(hidden_dim=hidden_dim, causal=causal, max_seq_len=max_seq_len, num_heads=num_heads, dropout=dropout)
+
+        self.ffn = SwishGLU(hidden_dim, 2 * hidden_dim, dropout=dropout)
+        # self.rms_norm1 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        # self.rms_norm2 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
+        # self.rms_norm2 = nn.LayerNorm([max_seq_len-9, hidden_dim])
+
+    def forward(self, x):
+        x = self.attn_layer(x)
+
+        # x = self.rms_norm1(x)
+
+        x = self.ffn(x)
+
+        # x = self.rms_norm2(x)
+        return x
+
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
                  activation="glu"):

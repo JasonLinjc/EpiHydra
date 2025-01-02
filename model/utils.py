@@ -1,22 +1,20 @@
+import pickle
+
 import torch
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from sklearn.metrics import precision_recall_curve, auc, roc_auc_score
-from scipy.stats import pearsonr
-from tokenizers import Tokenizer
+
 from torch import nn
-from torch.nn import functional as F
-from torch.nn.functional import pad
-from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoTokenizer
 # from src.dataloaders.utils.mlm import mlm_getitem
 import pandas as pd
 import numpy as np
-import kipoiseq
-from kipoiseq import Interval
-import pyfaidx
+
 import random
 import h5py
 from Bio.Seq import Seq
 import torch.nn.functional as F
+
+# from boda.common.constants import MPRA_UPSTREAM, MPRA_DOWNSTREAM
 
 
 def compile_decorator(func):
@@ -27,47 +25,137 @@ def disable_compile_decorator(func):
     return torch._dynamo.disable(func, recursive=True)
 
 
-class MPRADataset(torch.utils.data.Dataset):
+class DHSEntropyDataset(torch.utils.data.Dataset):
     def __init__(self, path, set_type):
         self.set_type = set_type
-        # self.tokenizer = Tokenizer(200)
-        self.tokenizer = Tokenizer.from_file('./bpe.json')
+        self.tokenizer = CaduceusTokenizer(200)
+        # self.tokenizer = Tokenizer.from_file('./bpe_tokenizer256_all.json')
+        # self.tokenizer= AutoTokenizer.from_pretrained("zhihan1996/DNABERT-2-117M", trust_remote_code=True)
 
-        activity_columns = ['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC', 'sequence', 'type']
+        activity_columns = ['sequence', 'split_malinois']
         self.data = pd.read_csv(path, usecols=activity_columns)
-        self.data = self.data[self.data['type'] == set_type]
+        self.data = self.data[self.data['split_malinois'] == set_type]
         self.length = len(self.data)
 
     def __getitem__(self, item):
         seq = self.data.iloc[item]['sequence']
+        # p = random.random()
+        # if p>=0.5:
+        #     seq = Seq(seq)
+        #     seq.reverse_complement()
+        #     seq = str(seq)
+
+        seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+        seq = torch.LongTensor(seq)
+
+        return seq, 0
+
+    def __len__(self):
+        return self.length
+
+
+class ByteLevelTextDataset(torch.utils.data.Dataset):
+    def __init__(self, file_path, seq_length=200, ignore_non_ascii=True):
+        """
+        For training NTP language model
+        """
+        self.seq_length = seq_length
+        self.ignore_non_ascii = ignore_non_ascii
+        self.data = self._load_and_process_data(file_path)
+
+    def _load_and_process_data(self, file_path):
+        """process data"""
+        processed_data = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        for line in lines:
+            # 去除行末尾的换行符和其他空白字符
+            line = line.strip()
+
+            # 如果忽略非ASCII字符，则过滤掉它们
+            if self.ignore_non_ascii:
+                line = ''.join([ch for ch in line if ord(ch) < 128])
+
+            # 将字符串转换为ASCII码列表
+            byte_list = [ord(ch) for ch in line]
+
+            # 只保留长度为200或更长的序列
+            if len(byte_list) >= self.seq_length:
+                byte_list = byte_list[:self.seq_length]
+                processed_data.append(byte_list)
+
+        return torch.tensor(processed_data, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sequence = self.data[idx]
+        return sequence, 0
+
+
+class MPRADataset(torch.utils.data.Dataset):
+    def __init__(self, path, set_type, patches_path=None):
+        self.set_type = set_type
+        self.tokenizer = CaduceusTokenizer(200)
+        # self.tokenizer = Tokenizer.from_file('./bpe_tokenizer256_all.json')
+        # self.tokenizer= AutoTokenizer.from_pretrained("zhihan1996/DNABERT-2-117M", trust_remote_code=True)
+
+        activity_columns = ['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC', 'sequence', 'type']
+        self.data = pd.read_csv(path, usecols=activity_columns)
+        self.data = self.data[self.data['type'] == set_type]
+
+        if patches_path is not None:
+            with open(patches_path, 'rb') as f:
+                self.patches = pickle.load(f)
+        else:
+            self.patches = None
+
+        self.length = len(self.data)
+
+    def __getitem__(self, item):
+        seq = self.data.iloc[item]['sequence']
+
         while len(seq)<200:
             item = random.randint(0, self.length-1)
             seq = self.data.iloc[item]['sequence']
 
-        p = random.random()
-        if p>=0.5:
-            seq = Seq(seq)
-            seq.reverse_complement()
-            seq = str(seq)
+        ### reverse complement
+        # p = random.random()
+        # if p>=0.5:
+        #     seq = Seq(seq)
+        #     seq.reverse_complement()
+        #     seq = str(seq)
 
-        # seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
-        seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
+        target = np.array(self.data.iloc[item].loc[['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC']], dtype=np.float32)
+        seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+        # seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
 
-        seq = torch.LongTensor(seq)
+        seq = torch.LongTensor(seq)-7
+
+        if self.patches is not None:
+            patching = torch.Tensor(self.patches[item])
+            pad = torch.zeros(200 - len(patching))
+            patching = torch.hstack((patching, pad))
+
+            return (seq, patching), target
 
         # if len(seq) > 200:
         #     seq = seq[:200]
-        length = len(seq)
-        if length < 72:
-            temp = torch.zeros((72,), dtype=torch.int64)
-            temp[:length] = seq
-            seq = temp
+        # length = len(seq)
+        # if length < 48:
+        #     temp = torch.zeros((48,), dtype=torch.int64)
+        #     temp[:length] = seq
+        #     seq = temp
+        # if length > 48:
+        #     seq = seq[:48]
 
-        target = np.array(self.data.iloc[item].loc[['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC']],dtype=np.float32)
         return seq, target
 
     def __len__(self):
         return self.length
+
 
 class EPCOTDataset(torch.utils.data.Dataset):
     def __init__(
@@ -379,3 +467,25 @@ def calculate_auroc(targets, outputs):
 
     return aurocs, mean_aurocs, std_aurocs
 
+
+def get_callbacks(monitor, monitor_mode, project_name, experiment_name, patience=3):
+    checkpoint_callback = ModelCheckpoint(
+        monitor=monitor,
+        dirpath=f'./weight/{project_name}/{experiment_name}/',
+        filename='{epoch:02d}-{'+ monitor +':.2f}',
+        save_top_k=1,
+        mode=monitor_mode
+    )
+    early_stopping = EarlyStopping(monitor=monitor, patience=patience, mode=monitor_mode)
+    checkpoint_callback_latest = ModelCheckpoint(
+        monitor=None,
+        save_top_k=1,
+        dirpath=f'./weight/{project_name}/{experiment_name}/',
+        filename=f'{experiment_name}-latest'
+    )
+    callbacks=[
+        early_stopping,
+        checkpoint_callback,
+        checkpoint_callback_latest
+    ]
+    return callbacks

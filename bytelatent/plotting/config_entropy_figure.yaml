@@ -1,0 +1,3 @@
+data_path: plot_data/entropy_figure.json
+chart_path: figures/entropy_figure.pdf
+# chart_path: figures/entropy_figure.pdf

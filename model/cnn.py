@@ -7,6 +7,7 @@ from torch import nn
 from .hyper_model import RegHyperModel, ClassHyperModel
 import torch.nn.functional as F
 
+from .transformer.blt import BLTLocalEncoder
 from .utils import seq2onehot, focal_loss
 
 
@@ -81,6 +82,7 @@ class EPCOTBackboneClass(ClassHyperModel):
 
         return bce
 
+
 class EPCOTBackboneReg(RegHyperModel):
     def __init__(self, args):
         super().__init__()
@@ -89,7 +91,7 @@ class EPCOTBackboneReg(RegHyperModel):
         # self.backbone = torch.compile(self.backbone, fullgraph=True, dynamic=False, mode='max-autotune')
         self.classifier = nn.Sequential(
             nn.Flatten(-2, -1),
-            nn.Linear(1280, 128),
+            nn.Linear(12*256, 128),
             nn.ReLU(),
             nn.BatchNorm1d(128),
             nn.Linear(128, 3),
@@ -137,14 +139,110 @@ class EPCOTBackboneReg(RegHyperModel):
         return loss[0]
 
 class EPCOTConvLayer(nn.Module):
-    def __init__(self, in_dim, out_dim, kernel_size):
+    def __init__(self, in_dim, out_dim, kernel_size, dropout):
         super().__init__()
         self.conv = nn.Conv1d(in_dim, out_dim, kernel_size=kernel_size, padding='same')
         self.act = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.act(x)
+        return x
+
+class DeepCNNBLT(RegHyperModel):
+    def __init__(self, args):
+        super().__init__()
+        self.lr = args.lr
+        self.best_val_pr = 0
+        self.weight_decay = args.weight_decay
+        self.loss_type = args.loss_type
+
+        self.local_encoder = BLTLocalEncoder()
+        self.backbone = DeepCNNEncoder(256, 256, [10,8,5,5], [200, 100, 50, 25])
+
+        self.regressor = nn.Sequential(
+            nn.Flatten(-2,-1),
+            nn.Linear(25*256, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Linear(64,3)
+        )
+
+    def forward(self, x):
+        x, patch_lengths = x
+        x = self.local_encoder(x, patch_lengths).transpose(1, 2)
+        x = self.backbone(x)
+        output = self.regressor(x)
+        return {'output': output}
+
+    def calculate_loss(self, target, output, mask=None, mode='train'):
+        if mask is not None:
+            target = target[mask]
+            output = output[mask]
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+        if 'l1' in self.loss_type:
+            l1 = F.l1_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_l1', l1, on_step=True, on_epoch=True)
+            loss.append(l1)
+        if 'kl' in self.loss_type:
+            kl = F.kl_div(F.log_softmax(output), F.log_softmax(target))
+            if mode != 'test':
+                self.log(mode + '_kl', kl, on_step=True, on_epoch=True)
+            loss.append(kl)
+
+        if len(loss) > 1:
+            loss = self.loss_balancer(loss)
+            return loss
+        else:
+            return loss[0]
+class DeepCNNEncoder(nn.Module):
+    def __init__(self, in_channel, hidden_dim, kernel_size, length):
+        super().__init__()
+        self.conv_block1 = nn.Sequential(
+            EPCOTConvBlock(1, in_channel, hidden_dim, dropout=0.1, kernel_size=kernel_size[0], length=length[0]),
+        )
+        self.conv_block2 = nn.Sequential(
+            EPCOTConvBlock(3, in_channel, hidden_dim, dropout=0.1, kernel_size=kernel_size[1], length=length[1]),
+        )
+        self.conv_block3 = nn.Sequential(
+            EPCOTConvBlock(3, in_channel, hidden_dim, dropout=0.1, kernel_size=kernel_size[2], length=length[2]),
+        )
+        self.conv_block4 = EPCOTConvBlock(3, in_channel, hidden_dim, dropout=0.1, kernel_size=kernel_size[3], length=length[3])
+        self.pooling_layer1 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2, stride=2),
+            nn.LayerNorm([hidden_dim, length[1]]),
+            nn.Dropout(p=0.1),
+        )
+        self.pooling_layer2 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2, stride=2),
+            nn.LayerNorm([hidden_dim, length[2]]),
+            nn.Dropout(p=0.1),
+        )
+        self.pooling_layer3 = nn.Sequential(
+            nn.AvgPool1d(kernel_size=2, stride=2),
+            nn.LayerNorm([hidden_dim, length[3]]),
+            nn.Dropout(p=0.1),
+        )
+
+    def forward(self, x):
+        x = self.conv_block1(x)
+        x = self.pooling_layer1(x)
+
+        x = self.conv_block2(x)
+        x = self.pooling_layer2(x)
+
+        x = self.conv_block3(x)
+        x = self.pooling_layer3(x)
+
+        x = self.conv_block4(x)
+
         return x
 
 
@@ -152,69 +250,24 @@ class EPCOTEncoder(nn.Module):
     def __init__(self, in_dim):
         super().__init__()
 
-        # self.conv_block1 = nn.Sequential(
-        #     EPCOTConvLayer(in_dim, 256, kernel_size=10),
-        #     nn.Dropout(p=0.1),
-        #     EPCOTConvLayer(256, 256, kernel_size=10),
-        # )
-        # self.conv_block2 = nn.Sequential(
-        #     EPCOTConvLayer(256, 360, kernel_size=8),
-        #     nn.Dropout(p=0.1),
-        #     EPCOTConvLayer(360, 360, kernel_size=8),
-        # )
-        # self.conv_block3 = nn.Sequential(
-        #     EPCOTConvLayer(360, 512, kernel_size=8),
-        #     nn.Dropout(p=0.2),
-        #     EPCOTConvLayer(512, 512, kernel_size=8),
-        #     nn.BatchNorm1d(512),
-        #     nn.Dropout(p=0.2),
-        # )
-        #
-        # self.pooling_layer1 = nn.Sequential(
-        #     nn.MaxPool1d(kernel_size=5, stride=5),
-        #     nn.BatchNorm1d(256),
-        #     nn.Dropout(p=0.1),
-        # )
-        # self.pooling_layer2 = nn.Sequential(
-        #     nn.MaxPool1d(kernel_size=4, stride=4),
-        #     nn.BatchNorm1d(360),
-        #     nn.Dropout(p=0.1),
-        # )
+        self.conv_block1 = EPCOTConvBlock(in_dim,256, 0.1,10, 48)
 
-        self.conv_block1 = nn.Sequential(
-            EPCOTConvBlock(4,128, 0.1,10, 200),
-            EPCOTConvBlock(128, 128, 0.1, 10, 200),
-            # EPCOTConvBlock(128, 128, 0.1, 10, 200),
-            # EPCOTConvBlock(128, 128, 0.1, 10, 200),
-        )
-        self.conv_block2 = nn.Sequential(
-            EPCOTConvBlock(128,128, 0.1, 8, 40),
-            EPCOTConvBlock(128, 128, 0.1, 8, 40),
-            # EPCOTConvBlock(256, 256, 0.1, 8, 40),
-            # EPCOTConvBlock(256, 256, 0.1, 8, 40),
-        )
+        self.conv_block2 = EPCOTConvBlock(256,360, 0.1, 8, 24)
 
-
-        self.conv_block3 = nn.Sequential(
-            EPCOTConvBlock(128,128, 0.1, 8, 10),
-            EPCOTConvBlock(128, 128, 0.1, 8, 10),
-            # EPCOTConvBlock(256, 256, 0.1, 8, 10),
-            # EPCOTConvBlock(256, 256, 0.1, 8, 10),
-        )
+        self.conv_block3 = EPCOTConvBlock(360,512, 0.1, 8, 12)
 
         self.pooling_layer1 = nn.Sequential(
-            nn.MaxPool1d(kernel_size=5, stride=5),
-            nn.BatchNorm1d(128),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.BatchNorm1d(256),
             nn.Dropout(p=0.1),
         )
         self.pooling_layer2 = nn.Sequential(
-            nn.MaxPool1d(kernel_size=4, stride=4),
-            nn.BatchNorm1d(128),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.BatchNorm1d(256),
             nn.Dropout(p=0.1),
         )
-    @torch.compile(fullgraph=True, dynamic=False, mode='max-autotune')
+    # @torch.compile(fullgraph=True, dynamic=False, mode='max-autotune')
     def forward(self, x):
-
         x = self.conv_block1(x)
         # x = self.conv_block2(x)
         x = self.pooling_layer1(x)
@@ -229,11 +282,21 @@ class EPCOTEncoder(nn.Module):
         return x
 
 class EPCOTConvBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, dropout, kernel_size, length):
+    def __init__(self, num_layers, in_dim, out_dim, dropout, kernel_size, length):
         super().__init__()
-        self.conv1 = EPCOTConvLayer(in_dim, out_dim, kernel_size)
-        self.dropout = nn.Dropout(p=dropout)
-        self.conv2 = EPCOTConvLayer(out_dim, out_dim, kernel_size)
+        layers = []
+        for i in range(num_layers):
+            if i==0:
+                layers.append(EPCOTConvLayer(in_dim, out_dim, kernel_size, dropout))
+            else:
+                layers.append(EPCOTConvLayer(out_dim, out_dim, kernel_size, dropout))
+
+        self.layers = nn.ModuleList(layers)
+        # self.conv1 = EPCOTConvLayer(in_dim, out_dim, kernel_size)
+        # self.dropout1 = nn.Dropout(p=dropout)
+        # self.conv2 = EPCOTConvLayer(out_dim, out_dim, kernel_size)
+        # self.dropout2 = nn.Dropout(p=dropout)
+        # self.conv3 = EPCOTConvLayer(out_dim, out_dim, kernel_size)
 
         self.norm = nn.LayerNorm([out_dim, length])
 
@@ -244,10 +307,14 @@ class EPCOTConvBlock(nn.Module):
 
     def forward(self, x):
         short_cut = x
+        for m in self.layers:
+            x = m(x)
+        # x = self.conv1(x)
+        # x = self.dropout1(x)
+        # x = self.conv2(x)
+        # x = self.dropout2(x)
+        # x = self.conv3(x)
 
-        x = self.conv1(x)
-        x = self.dropout(x)
-        x = self.conv2(x)
         if self.res:
             x = x+short_cut
         x = self.norm(x)

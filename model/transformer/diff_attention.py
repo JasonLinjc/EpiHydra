@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from flash_attn import flash_attn_func
 from torch import nn
 
+from .attention import MultiheadFlashAttention
 from .rms_norm import RMSNorm
 from .rotary import apply_rotary_emb
 from ..utils import disable_compile_decorator
@@ -49,6 +50,10 @@ class MultiheadFlashDiff2(nn.Module):
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.k_proj = nn.Linear(embed_dim, embed_dim // self.n_rep, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim // self.n_rep, bias=False)
+        # self.q_proj = nn.Conv1d(embed_dim, embed_dim, kernel_size=5, padding='same')
+        # self.k_proj = nn.Conv1d(embed_dim, embed_dim // self.n_rep, kernel_size=5, padding='same')
+        # self.v_proj = nn.Conv1d(embed_dim, embed_dim // self.n_rep, kernel_size=5, padding='same')
+
         torch.nn.init.xavier_uniform_(self.q_proj.weight)
         torch.nn.init.xavier_uniform_(self.k_proj.weight)
         torch.nn.init.xavier_uniform_(self.v_proj.weight)
@@ -81,12 +86,13 @@ class MultiheadFlashDiff2(nn.Module):
         dtype = x.dtype
         src_len = tgt_len
 
-        q = self.q_proj(x)
-        k = self.k_proj(x)
+        # x = x.transpose(1,2)
+        q = self.q_proj(x)#.transpose(1,2)
+        k = self.k_proj(x)#.transpose(1,2)
         q = q.view(bsz, tgt_len, 2 * self.num_heads, self.head_dim)
         k = k.view(bsz, src_len, 2 * self.num_kv_heads, self.head_dim)
 
-        v = self.v_proj(x)
+        v = self.v_proj(x)#.transpose(1,2)
         v = v.view(bsz, src_len, self.num_kv_heads, 2, self.head_dim)
         dtype = q.dtype
 
@@ -140,6 +146,7 @@ class DiffAttnLayer(nn.Module):
     def  __init__(self, hidden_dim, depth, max_seq_len, num_heads, output_project=False, dropout=0.1):
         super().__init__()
         self.attn_layer = MultiheadFlashDiff2(embed_dim=hidden_dim, depth=depth, max_seq_len=max_seq_len, num_heads=num_heads, output_project=output_project)
+        # self.attn_layer = MultiheadFlashAttention(embed_dim=hidden_dim, max_seq_len=max_seq_len, num_heads=num_heads, output_project=output_project)
         self.dropout = nn.Dropout(dropout)
         self.norm1 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
         self.norm2 = RMSNorm(hidden_dim, eps=1e-5, elementwise_affine=True)
