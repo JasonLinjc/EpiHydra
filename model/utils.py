@@ -1,3 +1,4 @@
+import ast
 import pickle
 
 import torch
@@ -13,6 +14,8 @@ import random
 import h5py
 from Bio.Seq import Seq
 import torch.nn.functional as F
+
+
 
 # from boda.common.constants import MPRA_UPSTREAM, MPRA_DOWNSTREAM
 
@@ -61,39 +64,51 @@ class ByteLevelTextDataset(torch.utils.data.Dataset):
         """
         self.seq_length = seq_length
         self.ignore_non_ascii = ignore_non_ascii
-        self.data = self._load_and_process_data(file_path)
+        self.data = pd.read_csv(file_path)
+        # self.pad = 0
+        # self.eos = 1
+        # self.unk = 2
+        # self.alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=~!%* ,./?;\':"\\|'
+        # self.tokenizer = {chara: i+3 for i, chara in enumerate(self.alphabet)}
+        # self.tokenizer =
 
-    def _load_and_process_data(self, file_path):
-        """process data"""
-        processed_data = []
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        for line in lines:
-            # 去除行末尾的换行符和其他空白字符
-            line = line.strip()
-
-            # 如果忽略非ASCII字符，则过滤掉它们
-            if self.ignore_non_ascii:
-                line = ''.join([ch for ch in line if ord(ch) < 128])
-
-            # 将字符串转换为ASCII码列表
-            byte_list = [ord(ch) for ch in line]
-
-            # 只保留长度为200或更长的序列
-            if len(byte_list) >= self.seq_length:
-                byte_list = byte_list[:self.seq_length]
-                processed_data.append(byte_list)
-
-        return torch.tensor(processed_data, dtype=torch.long)
+    # def tokenize(self, text):
+    #     tokens = []
+    #     for char in text:
+    #         if char in self.tokenizer:
+    #             tokens.append(self.tokenizer[char])
+    #         else:
+    #             tokens.append(self.unk)
+    #     return tokens
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        sequence = self.data[idx]
-        return sequence, 0
+        ## get seq
+        sequence = self.data.loc[idx, 'seq']
+        patch_lengths = self.data.loc[idx, 'patch_lengths']
+        patch_lengths = torch.tensor(ast.literal_eval(patch_lengths), dtype=torch.int64)
 
+        ## tokenization via ascii
+        # token = self.tokenize(sequence)
+        token = [ord(ch) for ch in sequence]
+        token = torch.tensor(token, dtype=torch.int64)
+
+        ## get target
+        target = torch.hstack((token[1:], torch.tensor(self.eos, dtype=torch.int64)))
+
+        ## padding
+        if len(token) < self.seq_length:
+            padding_length = self.seq_length-len(token)
+            pad = torch.zeros((padding_length,), dtype=torch.int64)
+            token = torch.hstack((token, pad))
+            target = torch.hstack((target, pad))
+            patch_lengths = torch.hstack((patch_lengths, torch.tensor(padding_length, dtype=torch.int64)))
+
+        ## pad patch lengths
+        patch_lengths = torch.hstack((patch_lengths, torch.zeros((self.seq_length-len(patch_lengths)), dtype=torch.int64)))
+        return (token, patch_lengths), target
 
 class MPRADataset(torch.utils.data.Dataset):
     def __init__(self, path, set_type, patches_path=None):
