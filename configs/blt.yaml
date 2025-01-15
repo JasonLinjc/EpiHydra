@@ -1,0 +1,35 @@
+# training config
+device: 'cuda'
+max_epochs: 50
+batch_size: 32
+precision: 'bf16-mixed'
+monitor: 'val_pr'
+monitor_mode: 'max'
+loss_type: 'mse'
+lr: 0.0001
+weight_decay: 1e-6
+
+blt:
+# global config
+ vocab_size: 5
+ max_length: 200
+ dim: 256
+ n_heads: 8
+ max_patch_length: 60
+
+ # encoder config
+ max_encoder_seq_length: 200
+ cross_attn_encoder: true
+ cross_attn_all_layers_encoder: false
+ encoder_hash_byte_group_size: [3]
+ encoder_hash_byte_group_vocab: 127
+ encoder_hash_byte_group_nb_functions: 1
+ n_layers_local_encoder: 2
+
+ # decoder config
+ cross_attn_decoder: true
+ cross_attn_all_layers_decoder: false
+ n_layers_local_decoder: 2
+
+ # global transformer
+ n_layers_global: 2
