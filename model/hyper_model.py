@@ -9,9 +9,54 @@ from torch.nn import functional as F
 
 from .utils import focal_loss, calculate_auprc, calculate_auroc
 
-class ClassHyperModel(LightningModule):
+
+class NTPHyperModel(LightningModule):
     def __init__(self):
-        super(ClassHyperModel, self).__init__()
+        super(NTPHyperModel, self).__init__()
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        loss = self.calculate_loss(x, y)
+
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        return {'loss': loss}
+
+    def on_validation_start(self) -> None:
+        self.epoch_loss = []
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        loss = self.calculate_loss(x, y)
+        self.epoch_loss.append(loss)
+
+        self.log('val_loss', loss, on_step=True, on_epoch=True, sync_dist=True, prog_bar=True)
+
+        return {'val_loss': loss}
+
+    def on_validation_epoch_end(self):
+        self.epoch_loss = torch.Tensor(self.epoch_loss)
+        self.epoch_loss = self.epoch_loss.mean()
+
+        if self.epoch_loss<self.best_val_loss:
+            self.best_val_loss = self.epoch_loss
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        loss = self.calculate_loss(x, y)
+        # loss = self.calculate_loss(target, **output_dict)
+        self.log('test_loss', loss, on_step=True, prog_bar=True, sync_dist=True)
+
+    def on_test_epoch_end(self) -> None:
+        self.log('best_val_loss', self.best_val_loss)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        return optimizer
+
+
+class ClassificationHyperModel(LightningModule):
+    def __init__(self):
+        super(ClassificationHyperModel, self).__init__()
 
     def training_step(self, batch, batch_idx):
         x, target, dnase = batch
@@ -81,9 +126,9 @@ class ClassHyperModel(LightningModule):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         return optimizer
 
-class RegHyperModel(LightningModule):
+class RegressionHyperModel(LightningModule):
     def __init__(self):
-        super(RegHyperModel, self).__init__()
+        super(RegressionHyperModel, self).__init__()
         # self.criterion=WeightedMSELoss([1,2,2,2])
 
     def training_step(self, batch, batch_idx):

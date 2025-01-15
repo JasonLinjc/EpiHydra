@@ -56,6 +56,19 @@ class DHSEntropyDataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.length
 
+class TestDataset(torch.utils.data.Dataset):
+    def __init__(self, seq_length):
+        self.seq_length = seq_length
+
+    def __getitem__(self, item):
+        seq = torch.randint(0, 5, (self.seq_length,), dtype=torch.int64)
+        patch_lengths = torch.ones((self.seq_length,), dtype=torch.int32)
+        target = torch.ones((self.seq_length,), dtype=torch.int64)
+
+        return (seq, patch_lengths), target
+
+    def __len__(self):
+        return 1000
 
 class ByteLevelTextDataset(torch.utils.data.Dataset):
     def __init__(self, file_path, seq_length=200, ignore_non_ascii=True):

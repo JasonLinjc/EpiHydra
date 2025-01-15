@@ -3,9 +3,10 @@ import torch
 from pytorch_lightning import LightningModule
 
 from bytelatent.model.blt import ByteLatentTransformer
-from model.hyper_model import NTPHyperModel
+from model.hyper_model import NTPHyperModel, RegressionHyperModel
 from model.transformer.attention import MultiheadFlashAttention
 import torch.nn as nn
+import torch.nn.functional as F
 
 from model.transformer.transformer import FlashTransformerLayer
 from model.utils import seq2onehot
@@ -21,8 +22,8 @@ class BLT(NTPHyperModel):
         self.eos = 128
         self.pad = 129
         # self.unk=2
-        self.alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=~!%* ,./?;\':"\\|'
-        self.tokenizer = {chara: i + 3 for i, chara in enumerate(self.alphabet)}
+        # self.alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=~!%* ,./?;\':"\\|'
+        # self.tokenizer = {chara: i + 3 for i, chara in enumerate(self.alphabet)}
 
         self.backbone = ByteLatentTransformer(args)
         self.criterion = nn.CrossEntropyLoss()
@@ -104,6 +105,54 @@ class BLT(NTPHyperModel):
 
         return ''.join(prompt)
 
+class BLTDNALM(RegressionHyperModel):
+    def __init__(self, args, lr=0.0001, weight_decay=1e-6, output_channels=3, loss_type='mse'):
+        super().__init__()
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.best_val_pr = 0
+        self.loss_type = loss_type
 
+        self.backbone = ByteLatentTransformer(args)
+        self.regressor = nn.Sequential(
+            nn.Flatten(-2,-1),
+            nn.Linear(args.vocab_size*args.max_length, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Linear(64, output_channels)
+        )
 
+    def forward(self, data):
+        x, patch_lengths = data
+        x = self.backbone(x, patch_lengths=patch_lengths)
 
+        x = self.regressor(x)
+
+        return {'output': x}
+
+    def calculate_loss(self, target, output, mask=None, mode='train'):
+        if mask is not None:
+            target = target[mask]
+            output = output[mask]
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+        if 'l1' in self.loss_type:
+            l1 = F.l1_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_l1', l1, on_step=True, on_epoch=True)
+            loss.append(l1)
+        if 'kl' in self.loss_type:
+            kl = F.kl_div(F.log_softmax(output), F.log_softmax(target))
+            if mode != 'test':
+                self.log(mode + '_kl', kl, on_step=True, on_epoch=True)
+            loss.append(kl)
+
+        if len(loss) > 1:
+            loss = self.loss_balancer(loss)
+            return loss
+        else:
+            return loss[0]

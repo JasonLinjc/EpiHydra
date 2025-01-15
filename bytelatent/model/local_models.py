@@ -43,8 +43,12 @@ class LocalModelBase(nn.Module):
         self.boe_id = BOE_ID
 
         self.norm = RMSNorm(args.dim, eps=args.norm_eps)
+
+        self.start_depth = 0
+        if 'LocalDecoder' in str(self.__class__):
+            self.start_depth = args.n_layers_local_encoder+1+args.n_layers_global
         self.layers = nn.ModuleList(
-            [TransformerBlock(args) for _ in range(args.n_layers)]
+            [TransformerBlock(args, i+self.start_depth) for i in range(args.n_layers)]
         )
 
         self.tok_embeddings = nn.Embedding(self.vocab_size, args.dim)
@@ -186,6 +190,7 @@ class LocalEncoder(LocalModelBase):
         self.cross_attn_all_layers_encoder = args.cross_attn_all_layers_encoder
         self.cross_attn_init_by_pooling = args.cross_attn_init_by_pooling
         self.cross_attn_nheads = args.cross_attn_nheads
+        self.start_depth = 0
 
         if self.cross_attn_encoder:
             self.cross_attn_layers = torch.nn.ModuleList()
@@ -253,7 +258,7 @@ class LocalEncoder(LocalModelBase):
                 h,
                 num_patches,
                 patch_ids=patch_ids,
-                downsampling_by_pooling=self.downsampling_by_pooling,# method of downsampling eg:avg, max ...
+                downsampling_by_pooling=self.downsampling_by_pooling, # method of downsampling eg:avg, max ...
                 patch_size=self.patch_size,
             )
             if self.patch_embedding_projection is not None:
@@ -283,6 +288,7 @@ class LocalDecoder(LocalModelBase):
         self.cross_attn_all_layers_decoder = args.cross_attn_all_layers_decoder
         self.cross_attn_init_by_pooling = args.cross_attn_init_by_pooling
         self.cross_attn_nheads = args.cross_attn_nheads
+        self.start_depth = args.n_layers_local_encoder + args.n_layers_global
 
         if self.cross_attn_decoder:
             self.cross_attn_layers = torch.nn.ModuleList()
@@ -316,8 +322,8 @@ class LocalDecoder(LocalModelBase):
         bs, seqlen = tokens.shape
         assert embeds is not None, "Embeddings must be provided"
 
-        if mask is None:
-            mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
+        # if mask is None:
+        #     mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
 
         h = embeds
 

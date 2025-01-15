@@ -274,7 +274,9 @@ def cross_attn_mask(
                 H=None,
                 Q_LEN=q_len,
                 KV_LEN=kv_len,
-                _compile=True,
+                _compile=False,
+                device=patch_lengths.device,
+                BLOCK_SIZE=8
             )
             return block_mask
         else:
@@ -396,6 +398,7 @@ def patch_ids_from_lengths(patch_lengths, seq_len):
     patch_ids = (cum_d.unsqueeze(-1) <= torch.arange(seq_len, device=cum_d.device)).sum(
         dim=-2
     ) - 1
+
     assert not (
         torch.max(patch_ids) > patch_lengths.shape[-1] or torch.min(patch_ids) < 0
     ), f"{torch.max(patch_ids)} > {patch_lengths.shape[-1]} or {torch.min(patch_ids)} < 0"
@@ -406,10 +409,11 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     model_config = ConfigDict(extra="forbid")
     # Basic model configuration
     seed: int = 42
-    vocab_size: int = 5
+    vocab_size: int = 128
     dim: int = 256
     n_layers: int = 2
     n_heads: int = 4
+    use_diff_attn: bool = False
     # TODO: What is the purpose of this parameter?
     weight_tying: bool = False
     sliding_window: Optional[int] = None
@@ -420,20 +424,21 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     dim_local_decoder: int = 256
     dim_local_encoder: int = 256
     n_layers_global: int = 8
-    n_layers_local_decoder: int = 8
+    n_layers_local_decoder: int = 4
     n_layers_local_encoder: int = 4
 
     # Tokenization and patching
     tokenization_mode: str = "bpe"
-    patch_size: float = None
-    patching_mode: str = None
+    patch_size: float = 10
+    patching_mode: str = 'entropy'
     patching_threshold: float = None
     patching_threshold_add: float = None
     monotonicity: bool = False
     patching_batch_size: int = 1
     patching_device: str = "cuda"
-    data_loader_patching: bool = False
-    max_patch_length: int = None
+    data_loader_patching: bool = True
+    max_patch_length: int = 200
+    realtime_patching: bool = False
 
     # Encoder/Decoder configuration
     tie_local_encoder_decoder_logits: bool = False
@@ -482,7 +487,7 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     init_use_depth: str = "current"
     attn_bias_type: str = "causal"
     alpha_depth: str = "disabled"
-    max_length: int = 2048
+    max_length: int = 200
 
     # Norm configuration
     norm_eps: float = 1e-5
@@ -572,6 +577,7 @@ class LocalEncoderArgs(ByteLatentTransformerArgs):
         self.cross_attn_decoder = False
         self.cross_attn_k = self.cross_attn_k if self.cross_attn_encoder else None
         self.attn_bias_type = "local_block_causal"
+        # self.attn_bias_type = 'causal'
 
 
 class GlobalTransformerArgs(ByteLatentTransformerArgs):
@@ -847,6 +853,9 @@ class ByteLatentTransformer(nn.Module):
                     patching_threshold_add=args.patching_threshold_add,
                     monotonicity=args.monotonicity,
                     max_patch_length=args.max_patch_length,
+                    output_channels=130,
+                    realtime_patching=args.realtime_patching,
+                    entropy_model_checkpoint_dir=args.entropy_model_checkpoint_dir
                 )
             )
 
@@ -944,7 +953,8 @@ class ByteLatentTransformer(nn.Module):
             tokens=local_encoder_tokens,
             embeds=local_encoder_embeds,
             patch_embeds=h_cross if self.cross_attn_encoder else None,
-            cross_mask=cross_attn_mask_enc,
+            # cross_mask=cross_attn_mask_enc,
+            cross_mask=None,
             num_patches=patch_lengths.shape[1],
             patch_ids=patch_ids,
         )

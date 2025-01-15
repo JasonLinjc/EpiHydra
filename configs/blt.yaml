@@ -15,7 +15,8 @@ blt:
  max_length: 200
  dim: 256
  n_heads: 8
- max_patch_length: 60
+ max_patch_length: 100
+ use_diff_attn: true
 
  # encoder config
  max_encoder_seq_length: 200
