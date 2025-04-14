@@ -95,8 +95,8 @@ class CrossAttention(nn.Module):
 
         # assert mask is None or isinstance(mask, BlockMask)
         xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-        # output = flex_attention_comp(xq, xk, xv, block_mask=mask)
-        output = flex_attention(xq, xk, xv, block_mask=mask)
+        output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+        # output = flex_attention(xq, xk, xv, block_mask=mask)
         output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
         output = self.wo(output.reshape(output_shape))
@@ -174,11 +174,11 @@ class GlobalTransformer(BaseTransformer):
 
         h = embeds
 
-        # mask = (
-        #     mask
-        #     if mask is not None
-        #     else create_causal_mask(seqlen, attn_impl, self.sliding_window)
-        # )
+        mask = (
+            mask
+            if mask is not None
+            else create_causal_mask(seqlen, attn_impl, self.sliding_window)
+        )
 
         if self.token_embedding_projection is not None and h.shape[-1] != self.dim:
             h = self.token_embedding_projection(h)

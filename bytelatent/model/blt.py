@@ -19,6 +19,7 @@ from bytelatent.model.local_models import LocalDecoder, LocalEncoder
 from bytelatent.model.transformer import GlobalTransformer
 from bytelatent.model.utils import downsample
 from bytelatent.tokenizers.constants import BOE_ID, BOS_ID, EOS_ID, OFFSET, PAD_ID
+from model.utils import seq2onehot
 
 
 def attention_flops_per_token(n_layers, seq_len, dim, causal):
@@ -275,8 +276,7 @@ def cross_attn_mask(
                 Q_LEN=q_len,
                 KV_LEN=kv_len,
                 _compile=False,
-                device=patch_lengths.device,
-                BLOCK_SIZE=8
+                BLOCK_SIZE=1
             )
             return block_mask
         else:
@@ -426,6 +426,7 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     n_layers_global: int = 8
     n_layers_local_decoder: int = 4
     n_layers_local_encoder: int = 4
+    use_cross_attn_mask: bool = None
 
     # Tokenization and patching
     tokenization_mode: str = "bpe"
@@ -439,6 +440,7 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     data_loader_patching: bool = True
     max_patch_length: int = 200
     realtime_patching: bool = False
+    patches_as_queries: bool = None
 
     # Encoder/Decoder configuration
     tie_local_encoder_decoder_logits: bool = False
@@ -468,6 +470,7 @@ class ByteLatentTransformerArgs(BaseTransformerArgs):
     encoder_hash_byte_group_nb_functions: int = 3
 
     # Model behavior and optimization
+    causal: bool = None
     log_patch_lengths: bool = False
     non_linearity: str = "swiglu"
     use_rope: bool = True
@@ -859,6 +862,18 @@ class ByteLatentTransformer(nn.Module):
                 )
             )
 
+        ## cnn embed
+        self.cnn_embed = nn.Sequential(
+            nn.Conv1d(4, args.dim, kernel_size=3, padding='same'),
+            nn.ReLU(),
+            nn.BatchNorm1d(args.dim),
+            nn.Conv1d(args.dim, args.dim, kernel_size=3, padding='same'),
+            nn.ReLU(),
+            nn.BatchNorm1d(args.dim),
+            nn.Conv1d(args.dim, args.dim, kernel_size=3, padding='same'),
+            nn.ReLU(),
+        )
+
     def forward(
         self,
         tokens: torch.Tensor,
@@ -953,25 +968,33 @@ class ByteLatentTransformer(nn.Module):
             tokens=local_encoder_tokens,
             embeds=local_encoder_embeds,
             patch_embeds=h_cross if self.cross_attn_encoder else None,
-            # cross_mask=cross_attn_mask_enc,
-            cross_mask=None,
+            cross_mask=cross_attn_mask_enc,
+            # cross_mask=None,
             num_patches=patch_lengths.shape[1],
             patch_ids=patch_ids,
         )
+
+        ## cnn embed
+        # one_hot = seq2onehot(local_encoder_tokens+7)
+        # cnn_embed = self.cnn_embed(one_hot).transpose(1,2)
+        # h_encoder = h_encoder+cnn_embed
+        # h_cross = h_cross+cnn_embed
 
         # Downsampling
         if not self.cross_attn_encoder:
             assert (
                 patch_ids.shape[1] == h_encoder.shape[1]
             ), f"{patch_ids.shape[1]} != {h_encoder.shape[1]}"
-            h = downsample(
-                h_encoder,
-                patch_lengths.shape[1],
-                patch_lengths,
-                patch_ids,
-                downsampling_by_pooling=self.downsampling_by_pooling,
-                patch_size=self.patch_size,
-            )
+            ## modified
+            # h = downsample(
+            #     h_encoder,
+            #     patch_lengths.shape[1],
+            #     patch_lengths,
+            #     patch_ids,
+            #     downsampling_by_pooling=self.downsampling_by_pooling,
+            #     patch_size=self.patch_size,
+            # )
+            h = h_encoder
         else:
             # Reshape h_cross
             h = h_cross.view(bs, patch_lengths.shape[1], -1)
@@ -1025,6 +1048,7 @@ class ByteLatentTransformer(nn.Module):
             patch_embeds=h,
             tokens=local_decoder_tokens,
             cross_mask=cross_attn_mask_dec,
+            # cross_mask=None
         )
         return output
 

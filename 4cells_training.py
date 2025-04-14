@@ -7,8 +7,8 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from model import utils
-from model.cnn import ExperimentArgs, EPCOTBackboneClass
-from model.transformer.diff_transformer import DiffTransformerClass
+from model.cnn import ExperimentArgs, EPCOTBackboneClassification
+from model.transformer.diff_transformer import DiffTransformerClassification
 
 cell='4cells'
 # project_name=cell+'-EPCOT-DiffT'
@@ -37,7 +37,7 @@ args = ExperimentArgs(loss_type=loss_type,
                       num_class=num_class)
 
 # model = EPCOTBackboneClass(args)
-model = DiffTransformerClass(args)
+model = DiffTransformerClassification(args)
 
 
 trainset = utils.EPCOTDataset('../EPCOT/data/4cells245_train.h5')

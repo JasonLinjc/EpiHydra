@@ -19,6 +19,7 @@ from bytelatent.base_transformer import (
 from bytelatent.model.transformer import CrossAttention
 from bytelatent.model.utils import create_causal_mask, downsample
 from bytelatent.tokenizers.blt_tokenizer import BOE_ID
+from model.utils import seq2onehot
 
 logger = logging.getLogger()
 
@@ -191,6 +192,20 @@ class LocalEncoder(LocalModelBase):
         self.cross_attn_init_by_pooling = args.cross_attn_init_by_pooling
         self.cross_attn_nheads = args.cross_attn_nheads
         self.start_depth = 0
+        self.causal = args.causal
+        self.patches_as_queries = args.patches_as_queries
+
+        # self.cnn_embed = nn.Sequential(
+        #     nn.Conv1d(4, args.dim, kernel_size=3, padding='same'),
+        #     nn.ReLU(),
+        #     nn.BatchNorm1d(args.dim),
+        #     nn.Conv1d(args.dim, args.dim, kernel_size=3, padding='same'),
+        #     nn.ReLU(),
+        #     nn.BatchNorm1d(args.dim),
+        #     nn.Conv1d(args.dim, args.dim, kernel_size=3, padding='same'),
+        #     nn.ReLU(),
+        #     # nn.BatchNorm1d(args.dim),
+        # )
 
         if self.cross_attn_encoder:
             self.cross_attn_layers = torch.nn.ModuleList()
@@ -228,8 +243,9 @@ class LocalEncoder(LocalModelBase):
     ):
         """ """
         bs, seqlen = tokens.shape
-        # if mask is None:
-        #     mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
+
+        if mask is None and self.causal:
+            mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
 
         h = self.apply_embedding(tokens, embeds)
         freqs_cis = self.rope(seqlen=seqlen) if self.use_rope else None
@@ -242,11 +258,17 @@ class LocalEncoder(LocalModelBase):
             if self.cross_attn_encoder and (
                 i == len(self.layers) - 1 or self.cross_attn_all_layers_encoder
             ):
+                ## cnn embed
+                # one_hot = seq2onehot(tokens + 7)
+                # cnn_embed = self.cnn_embed(one_hot).transpose(1,2)
+                # h = h+cnn_embed
+
                 patch_embeds = self.apply_cross_attention(
                     h, patch_embeds, i, bs, num_patches, patch_ids, cross_mask
                 )
 
-        h_residual = patch_embeds if self.cross_attn_encoder else None
+
+        h_residual = patch_embeds
         return (h, h_residual), cache
 
     def apply_cross_attention(
@@ -268,11 +290,18 @@ class LocalEncoder(LocalModelBase):
                 )
 
         layer_idx = layer_idx if self.cross_attn_all_layers_encoder else 0
-        patch_embeds_cross = self.cross_attn_layers[layer_idx](
-            x=patch_embeds,
-            kv=h,
-            mask=cross_mask,
-        )
+        if self.patches_as_queries:
+            patch_embeds_cross = self.cross_attn_layers[layer_idx](
+                x=patch_embeds,
+                kv=h,
+                mask=cross_mask,
+            )
+        else:
+            patch_embeds_cross = self.cross_attn_layers[layer_idx](
+                x=h,
+                kv=patch_embeds,
+                mask=cross_mask,
+            )
         patch_embeds += patch_embeds_cross
         return patch_embeds
 
@@ -289,6 +318,7 @@ class LocalDecoder(LocalModelBase):
         self.cross_attn_init_by_pooling = args.cross_attn_init_by_pooling
         self.cross_attn_nheads = args.cross_attn_nheads
         self.start_depth = args.n_layers_local_encoder + args.n_layers_global
+        self.causal = args.causal
 
         if self.cross_attn_decoder:
             self.cross_attn_layers = torch.nn.ModuleList()
@@ -322,8 +352,8 @@ class LocalDecoder(LocalModelBase):
         bs, seqlen = tokens.shape
         assert embeds is not None, "Embeddings must be provided"
 
-        # if mask is None:
-        #     mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
+        if mask is None and self.causal:
+            mask = create_causal_mask(seqlen, self.efficient_attn, self.sliding_window)
 
         h = embeds
 
@@ -337,6 +367,7 @@ class LocalDecoder(LocalModelBase):
 
         if patch_embeds is not None and not self.cross_attn_decoder: # if no patch embed and cross attn decoder
             h = h + patch_embeds
+            # pass ## modified
 
         freqs_cis = self.rope(seqlen=seqlen) if self.use_rope else None
 

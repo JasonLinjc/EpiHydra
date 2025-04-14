@@ -4,13 +4,13 @@ from torch import nn
 import torch.nn.functional as F
 
 from .ffn import FFN
-from .hyper_model import ClassHyperModel, RegHyperModel
+from .hyper_model import ClassificationHyperModel, RegressionHyperModel
 from .utils import seq2onehot, focal_loss, compile_decorator, disable_compile_decorator
 from model.stripedhyena import StripedHyena
 from .stripedhyena.utils import dotdict
 
 
-class HyenaBackboneClass(ClassHyperModel):
+class HyenaBackboneClassification(ClassificationHyperModel):
     def __init__(self, args, config_path="./configs/sh-stem-test.yml"):
         super().__init__()
         config = dotdict(yaml.load(open(config_path), Loader=yaml.FullLoader))
@@ -59,7 +59,7 @@ class HyenaBackboneClass(ClassHyperModel):
         return loss[0]
 
 
-class HyenaBackboneReg(RegHyperModel):
+class HyenaBackboneRegression(RegressionHyperModel):
     def __init__(self, args, config_path="./configs/sh-stem-test.yml"):
         super().__init__()
         config = dotdict(yaml.load(open(config_path), Loader=yaml.FullLoader))

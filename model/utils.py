@@ -16,16 +16,8 @@ from Bio.Seq import Seq
 import torch.nn.functional as F
 
 
-
-# from boda.common.constants import MPRA_UPSTREAM, MPRA_DOWNSTREAM
-
-
 def compile_decorator(func):
     return torch.compile(func, fullgraph=True, dynamic=False, mode='max-autotune')
-
-
-def disable_compile_decorator(func):
-    return torch._dynamo.disable(func, recursive=True)
 
 
 class DHSEntropyDataset(torch.utils.data.Dataset):
@@ -123,10 +115,13 @@ class ByteLevelTextDataset(torch.utils.data.Dataset):
         patch_lengths = torch.hstack((patch_lengths, torch.zeros((self.seq_length-len(patch_lengths)), dtype=torch.int64)))
         return (token, patch_lengths), target
 
+
 class MPRADataset(torch.utils.data.Dataset):
-    def __init__(self, path, set_type, patches_path=None):
+    def __init__(self, path, set_type, patches_path=None, reverse_complement=False, rc_patches_path=None, max_length=199):
         self.set_type = set_type
         self.tokenizer = CaduceusTokenizer(200)
+        self.max_length = max_length
+        self.rc = reverse_complement
         # self.tokenizer = Tokenizer.from_file('./bpe_tokenizer256_all.json')
         # self.tokenizer= AutoTokenizer.from_pretrained("zhihan1996/DNABERT-2-117M", trust_remote_code=True)
 
@@ -140,34 +135,37 @@ class MPRADataset(torch.utils.data.Dataset):
         else:
             self.patches = None
 
+        if rc_patches_path:
+            with open(rc_patches_path, 'rb') as f:
+                self.rc_patches = pickle.load(f)
+
+        else:
+            self.rc_patches = None
         self.length = len(self.data)
 
     def __getitem__(self, item):
         seq = self.data.iloc[item]['sequence']
 
-        while len(seq)<200:
-            item = random.randint(0, self.length-1)
-            seq = self.data.iloc[item]['sequence']
-
-        ### reverse complement
-        # p = random.random()
-        # if p>=0.5:
-        #     seq = Seq(seq)
-        #     seq.reverse_complement()
-        #     seq = str(seq)
-
         target = np.array(self.data.iloc[item].loc[['K562_log2FC', 'HepG2_log2FC', 'SKNSH_log2FC']], dtype=np.float32)
-        seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
-        # seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
-
-        seq = torch.LongTensor(seq)-7
 
         if self.patches is not None:
-            patching = torch.Tensor(self.patches[item])
-            pad = torch.zeros(200 - len(patching))
-            patching = torch.hstack((patching, pad))
+            p = random.random()
+            if self.rc and p >= 0.5:
+                seq = Seq(seq)
+                seq = seq.reverse_complement()
+                seq = str(seq)
+                patch = torch.Tensor(self.rc_patches[item])
+                pad = torch.zeros(self.max_length - len(patch))
+                patch = torch.hstack((patch, pad))
+            else:
+                patch = torch.Tensor(self.patches[item])
+                pad = torch.zeros(self.max_length - len(patch))
+                patch = torch.hstack((patch, pad))
+            seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+            # seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
 
-            return (seq, patching), target
+            seq = torch.LongTensor(seq) - 7
+            return (seq, patch), target
 
         # if len(seq) > 200:
         #     seq = seq[:200]
@@ -178,7 +176,16 @@ class MPRADataset(torch.utils.data.Dataset):
         #     seq = temp
         # if length > 48:
         #     seq = seq[:48]
-
+            ## reverse complement
+        if self.rc:
+            p = random.random()
+            if p >= 0.5:
+                seq = Seq(seq)
+                seq = seq.reverse_complement()
+                seq = str(seq)
+        seq = self.tokenizer(seq, truncation=True, add_special_tokens=False)['input_ids']
+        # seq = self.tokenizer.encode(seq, add_special_tokens=False).ids
+        seq = torch.LongTensor(seq) - 7
         return seq, target
 
     def __len__(self):
@@ -462,7 +469,7 @@ class CaduceusTokenizer(PreTrainedTokenizer):
         return ()
 
 def seq2onehot(x):
-    x = x-7
+    # x = x-7
     x = F.one_hot(x, num_classes=5)
     x = x[..., :4]
     return x.float().transpose(1, 2)

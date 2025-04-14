@@ -1,7 +1,7 @@
 import numpy as np
 
-from cnn import EPCOTEncoder, EPCOTBackboneClass
-from hyper_model import ClassHyperModel
+from cnn import EPCOTEncoder, EPCOTBackboneClassification
+from hyper_model import ClassificationHyperModel
 from model.transformer.transformer import Transformer
 from utils import seq2onehot
 
@@ -12,7 +12,7 @@ import torch.nn.functional as F
 # from apex.normalization import FusedRMSNorm as RMSNorm
 
 
-class EPCOTModel(ClassHyperModel):
+class EPCOTModel(ClassificationHyperModel):
     def __init__(self, args):
         super().__init__()
         self.backbone = EPCOTEncoder(args)
@@ -30,7 +30,7 @@ class EPCOTModel(ClassHyperModel):
         self.fc = GroupWiseLinear(args.num_class, hidden_dim, bias=True)
 
         if args.load_backbone:
-            pretrain_model = EPCOTBackboneClass.load_from_checkpoint(args.load_backbone, args=args)
+            pretrain_model = EPCOTBackboneClassification.load_from_checkpoint(args.load_backbone, args=args)
             self.backbone = pretrain_model.backbone
             if args.freeze_backbone:
                 for p in self.backbone.parameters():

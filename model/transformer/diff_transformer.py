@@ -12,7 +12,7 @@ from bytelatent.model.blt import get_blt_input, init_embeddings, compute_hash_em
 from bytelatent.model.local_models import LocalEncoder
 from model.cnn import EPCOTConvLayer, EPCOTEncoder, EPCOTConvBlock
 from model.ffn import SwishGLU
-from model.hyper_model import RegHyperModel, ClassHyperModel
+from model.hyper_model import RegressionHyperModel, ClassificationHyperModel
 from model.transformer.attention import MultiheadFlashAttention
 from model.transformer.diff_attention import MultiheadFlashDiff2, DiffAttnLayer
 from model.transformer.rms_norm import RMSNorm
@@ -48,7 +48,7 @@ class DiffTransformerEncoder(nn.Module):
         return x
 
 
-class DiffTransformerReg(RegHyperModel):
+class DiffTransformerRegression(RegressionHyperModel):
     def __init__(self, args):
         super().__init__()
         self.lr = args.lr
@@ -136,7 +136,7 @@ class DiffTransformerReg(RegHyperModel):
             return loss[0]
 
 
-class CNNDiffTransformerReg(RegHyperModel):
+class CNNDiffTransformerRegression(RegressionHyperModel):
     def __init__(self, args):
         super().__init__()
         self.conv_block1 = nn.Sequential(
@@ -275,7 +275,7 @@ class CNNDiffTransformerReg(RegHyperModel):
             return loss[0]
 
 
-class DiffTransformerClass(ClassHyperModel):
+class DiffTransformerClassification(ClassificationHyperModel):
     def __init__(self, args):
         super().__init__()
         self.lr = args.lr

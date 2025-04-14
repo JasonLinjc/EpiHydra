@@ -4,7 +4,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from .hyper_model import RegHyperModel, ClassHyperModel
+from bytelatent.model.local_models import LocalEncoder
+from .hyper_model import RegressionHyperModel, ClassificationHyperModel
 import torch.nn.functional as F
 
 from .transformer.blt import BLTLocalEncoder
@@ -35,7 +36,7 @@ class ExperimentArgs():
         self.compile = compile
 
 
-class EPCOTBackboneClass(ClassHyperModel):
+class EPCOTBackboneClassification(ClassificationHyperModel):
     def __init__(self, args):
         super().__init__()
         self.lr = args.lr
@@ -83,7 +84,7 @@ class EPCOTBackboneClass(ClassHyperModel):
         return bce
 
 
-class EPCOTBackboneReg(RegHyperModel):
+class EPCOTBackboneRegression(RegressionHyperModel):
     def __init__(self, args):
         super().__init__()
         self.loss_type = args.loss_type
@@ -150,7 +151,7 @@ class EPCOTConvLayer(nn.Module):
         x = self.act(x)
         return x
 
-class DeepCNNBLT(RegHyperModel):
+class DeepCNNBLT(RegressionHyperModel):
     def __init__(self, args):
         super().__init__()
         self.lr = args.lr
@@ -202,6 +203,8 @@ class DeepCNNBLT(RegHyperModel):
             return loss
         else:
             return loss[0]
+
+
 class DeepCNNEncoder(nn.Module):
     def __init__(self, in_channel, hidden_dim, kernel_size, length):
         super().__init__()
@@ -246,6 +249,68 @@ class DeepCNNEncoder(nn.Module):
         return x
 
 
+class BLTCNN(RegressionHyperModel):
+    def __init__(self, args, lr, weight_decay):
+        super().__init__()
+        self.lr = lr
+        self.loss_type='mse'
+        self.weight_decay = weight_decay
+        self.best_val_pr = 0
+
+        self.local_encoder = BLTLocalEncoder(args)
+        self.cnn = nn.Sequential(
+            EPCOTConvBlock(2, 256,256, kernel_size=3, length=199, dropout=0.1),
+            nn.AvgPool1d(kernel_size=4, stride=4),
+            EPCOTConvBlock(2, 256, 360, kernel_size=3, length=49, dropout=0.1),
+            # EPCOTConvBlock(2, 360, 360, kernel_size=3, length=49, dropout=0.1),
+            nn.AvgPool1d(kernel_size=5, stride=5),
+            EPCOTConvBlock(2, 360, 512, kernel_size=3, length=9, dropout=0.1),
+            # EPCOTConvBlock(2, 512, 512, kernel_size=8, length=9, dropout=0.1),
+        )
+        self.regressor = nn.Sequential(
+            nn.Flatten(-2,-1),
+            nn.Linear(9*512, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Linear(64,3),
+        )
+
+    def forward(self, data):
+        x, patch_lengths = data
+        # patch_lengths = torch.ones_like(x[:, :-1])
+        x = self.local_encoder(x[:, :-1], patch_lengths)
+        x = self.cnn(x.transpose(1, 2))
+        x = self.regressor(x)
+        return {'output': x}
+
+    def calculate_loss(self, target, output, mask=None, mode='train'):
+        if mask is not None:
+            target = target[mask]
+            output = output[mask]
+        loss = []
+        if 'mse' in self.loss_type:
+            mse = F.mse_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_mse', mse, on_step=True, on_epoch=True)
+            loss.append(mse)
+        if 'l1' in self.loss_type:
+            l1 = F.l1_loss(output, target)
+            if mode != 'test':
+                self.log(mode + '_l1', l1, on_step=True, on_epoch=True)
+            loss.append(l1)
+        if 'kl' in self.loss_type:
+            kl = F.kl_div(F.log_softmax(output), F.log_softmax(target))
+            if mode != 'test':
+                self.log(mode + '_kl', kl, on_step=True, on_epoch=True)
+            loss.append(kl)
+
+        if len(loss) > 1:
+            loss = self.loss_balancer(loss)
+            return loss
+        else:
+            return loss[0]
+
+
 class EPCOTEncoder(nn.Module):
     def __init__(self, in_dim):
         super().__init__()
@@ -267,6 +332,7 @@ class EPCOTEncoder(nn.Module):
             nn.Dropout(p=0.1),
         )
     # @torch.compile(fullgraph=True, dynamic=False, mode='max-autotune')
+
     def forward(self, x):
         x = self.conv_block1(x)
         # x = self.conv_block2(x)
@@ -280,6 +346,7 @@ class EPCOTEncoder(nn.Module):
         x = self.conv_block3(x)
 
         return x
+
 
 class EPCOTConvBlock(nn.Module):
     def __init__(self, num_layers, in_dim, out_dim, dropout, kernel_size, length):
@@ -300,7 +367,7 @@ class EPCOTConvBlock(nn.Module):
 
         self.norm = nn.LayerNorm([out_dim, length])
 
-        if in_dim==out_dim:
+        if in_dim == out_dim:
             self.res = True
         else:
             self.res = False

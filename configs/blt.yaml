@@ -1,10 +1,13 @@
 # training config
+project_name: 'EntropyPatches-NTP'
+experiment_name: 'blt212_128-no_patches-199'
+model_name: 'BLT'
 device: 'cuda'
 max_epochs: 50
 batch_size: 32
 precision: 'bf16-mixed'
-monitor: 'val_pr'
-monitor_mode: 'max'
+monitor: 'val_loss'
+monitor_mode: 'min'
 loss_type: 'mse'
 lr: 0.0001
 weight_decay: 1e-6
@@ -12,25 +15,39 @@ weight_decay: 1e-6
 blt:
 # global config
  vocab_size: 5
- max_length: 200
- dim: 256
+ max_length: 199
+ dim: 128
+ dim_token_emb: ${blt.dim}
+ dim_patch_emb: ${blt.dim}
+ dim_token: ${blt.dim}
  n_heads: 8
- max_patch_length: 100
- use_diff_attn: true
+ max_patch_length: 80
+ use_diff_attn: false
+ causal: true
 
  # encoder config
- max_encoder_seq_length: 200
- cross_attn_encoder: true
+ max_encoder_seq_length: 199
+ cross_attn_encoder: true #
  cross_attn_all_layers_encoder: false
- encoder_hash_byte_group_size: [3]
+ n_layers_local_encoder: 2 #
+ dim_local_encoder: ${blt.dim}
+ use_cross_attn_mask: true
+
+ encoder_hash_byte_group_size: [ 3 ]
  encoder_hash_byte_group_vocab: 127
  encoder_hash_byte_group_nb_functions: 1
- n_layers_local_encoder: 2
 
  # decoder config
- cross_attn_decoder: true
+ cross_attn_decoder: ${blt.cross_attn_encoder}
  cross_attn_all_layers_decoder: false
  n_layers_local_decoder: 2
+ dim_local_decoder: ${blt.dim}
 
  # global transformer
- n_layers_global: 2
+ n_layers_global: 1
+ dim_global: ${blt.dim}
+
+# hydra
+hydra:
+ run:
+  dir: ./outputs/${project_name}/${experiment_name}

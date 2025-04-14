@@ -1,6 +1,8 @@
 import numpy as np
+
 import torch
 from pytorch_lightning import LightningModule
+
 
 from bytelatent.model.blt import ByteLatentTransformer
 from model.hyper_model import NTPHyperModel, RegressionHyperModel
@@ -17,10 +19,10 @@ class BLT(NTPHyperModel):
         super().__init__()
         self.lr = lr
         self.weight_decay = weight_decay
-        self.max_length = 200
+        self.max_length = 199
         self.best_val_loss = 100
-        self.eos = 128
-        self.pad = 129
+        # self.sos = 5
+        # self.pad = 129
         # self.unk=2
         # self.alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-=~!%* ,./?;\':"\\|'
         # self.tokenizer = {chara: i + 3 for i, chara in enumerate(self.alphabet)}
@@ -35,23 +37,29 @@ class BLT(NTPHyperModel):
         #     nn.Linear(32, output_channels),
         # )# Batch, Length-1, 4
 
-    def forward(self, data):
-        seq, patch_lengths = data
+    def forward(self, seq, patch_lengths):
         output = self.backbone(seq, patch_lengths)
         return output
 
-    def calculate_loss(self, data, target):
+    def calculate_loss(self, data):
+        seq, patch_lengths = data
+        ## create target and input
+        # x = torch.ones_like(seq) * self.sos
+        x = seq[:, :-1]
+        target = seq[:, 1:]
+
         ## get target mask
-        target_mask = target != 129
+        # target_mask = target != self.pad
 
         ## forward
-        pred = self.forward(data)
+        pred = self.forward(x, patch_lengths)
 
         ## mask output and target
-        pred = pred[target_mask, :]
-        target = target[target_mask]
+        # pred = pred[target_mask, :]
+        # target = target[target_mask]
 
-        loss = self.criterion(pred, target)
+        loss = self.criterion(pred.flatten(0, 1), target.flatten(0, 1))
+
         return loss
 
     def tokenize(self, text):
@@ -112,6 +120,7 @@ class BLTDNALM(RegressionHyperModel):
         self.weight_decay = weight_decay
         self.best_val_pr = 0
         self.loss_type = loss_type
+        self.sos = 5
 
         self.backbone = ByteLatentTransformer(args)
         self.regressor = nn.Sequential(

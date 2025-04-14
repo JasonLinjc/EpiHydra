@@ -15,8 +15,8 @@ class NTPHyperModel(LightningModule):
         super(NTPHyperModel, self).__init__()
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        loss = self.calculate_loss(x, y)
+        data, _ = batch
+        loss = self.calculate_loss(data)
 
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return {'loss': loss}
@@ -25,8 +25,8 @@ class NTPHyperModel(LightningModule):
         self.epoch_loss = []
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        loss = self.calculate_loss(x, y)
+        data, _ = batch
+        loss = self.calculate_loss(data)
         self.epoch_loss.append(loss)
 
         self.log('val_loss', loss, on_step=True, on_epoch=True, sync_dist=True, prog_bar=True)
@@ -41,8 +41,8 @@ class NTPHyperModel(LightningModule):
             self.best_val_loss = self.epoch_loss
 
     def test_step(self, batch, batch_idx):
-        x, y = batch
-        loss = self.calculate_loss(x, y)
+        data, _ = batch
+        loss = self.calculate_loss(data)
         # loss = self.calculate_loss(target, **output_dict)
         self.log('test_loss', loss, on_step=True, prog_bar=True, sync_dist=True)
 

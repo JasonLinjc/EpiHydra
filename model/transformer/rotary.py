@@ -7,8 +7,6 @@ import torch
 import triton
 import triton.language as tl
 
-from model.utils import disable_compile_decorator
-
 
 # @triton.autotune(
 #     configs=[
@@ -301,7 +299,6 @@ class ApplyRotaryEmb(torch.autograd.Function):
         return dx, None, None, None, None, None, None, None
 
 # @torch._dynamo.disable
-@disable_compile_decorator
 def apply_rotary_emb(
     x,
     cos,

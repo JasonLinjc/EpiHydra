@@ -8,8 +8,6 @@ from torch import nn
 from .attention import MultiheadFlashAttention
 from .rms_norm import RMSNorm
 from .rotary import apply_rotary_emb
-from ..utils import disable_compile_decorator
-
 
 class MultiheadFlashDiff2(nn.Module):
     """
@@ -134,7 +132,7 @@ class MultiheadFlashDiff2(nn.Module):
         #     attn = self.subln2(attn)
         return attn
 
-    @disable_compile_decorator
+
     def build_rel_pos(self, dtype, length, start_pos):
         cos = torch.cos(self._precomputed_freqs_cis[start_pos:start_pos + length])
         sin = torch.sin(self._precomputed_freqs_cis[start_pos:start_pos + length])

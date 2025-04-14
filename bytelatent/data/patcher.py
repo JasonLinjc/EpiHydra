@@ -19,7 +19,6 @@ from model.entropy_model import EntropyModel
 
 # from model.entropy_model import EntropyModel
 
-
 class PatchingModeEnum(str, Enum):
     entropy = "entropy"
     bpe = "bpe"
@@ -40,7 +39,9 @@ class PatcherArgs(BaseModel):
     data_loader_patching: bool = False
     device: str = "cuda"
     monotonicity: bool = False
+    output_channels: int = 5
     log_time: bool = False
+    max_length: int = 0
 
     def build(self) -> "Patcher":
         return Patcher(self)
@@ -78,21 +79,22 @@ def calculate_entropies(
         splits = torch.split(tokens.flatten(), batch_numel)
         for split in splits:
             pad_size = (max_length - (split.numel() % max_length)) % max_length
-            pad = torch.zeros(
+            pad = torch.ones(
                 pad_size, dtype=split.dtype, device=split.device, requires_grad=False
-            )
+            )*129
             split = torch.cat((split, pad), dim=0)
             split = split.reshape(-1, max_length)
             if device is not None:
                 split = split.to(device)
             assert torch.all(split >= 0) and torch.all(split < 260)
 
-            pred = entropy_model(split[:,:-1])
+            pred = entropy_model(split)
+
             pred = pred.reshape(-1, pred.shape[-1])[
                 : split.numel() - pad_size, :
             ]  # [batch_size * seq_len, vocab]
             pred_entropies = entropy(pred)
-            pred_entropies = torch.hstack((torch.tensor(0).to(device), pred_entropies))
+            # pred_entropies = torch.hstack((torch.tensor(0).to(device), pred_entropies))
             entropies.append(pred_entropies)
 
         entropies = torch.cat(entropies, dim=0)
@@ -371,6 +373,7 @@ def find_entropy_patch_start_ids(
     patch_start_ids = torch.cat(
         (first_ids, patch_start_ids + preds_truncation_len), dim=1
     )
+
     return patch_start_ids
 
 
@@ -467,9 +470,9 @@ class Patcher:
             entropy_model = EntropyModel.load_from_checkpoint(
                 checkpoint_path=patcher_args.entropy_model_checkpoint_dir,
                 # checkpoint_path='weight/MPRA-EntropyModel/entropy_model-256-wikitext/epoch=79-val_loss=1.1486256122589111.ckpt',
-                hidden_dim=256, num_heads=4, max_seq_len=199
+                hidden_dim=256, num_heads=4, max_length=patcher_args.max_length, output_channels=patcher_args.output_channels
             ).to(torch.bfloat16)
-            self.entropy_model = entropy_model.cuda().eval()
+            self.entropy_model = entropy_model.to(patcher_args.device).eval()
         else:
             self.entropy_model = None
         self.threshold = patcher_args.threshold
